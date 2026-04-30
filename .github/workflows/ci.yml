@@ -21,4 +21,4 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy --strict src/vctl
-      - run: pytest -q --cov=vctl --cov-report=term-missing
+      - run: pytest -q --cov=vctl --cov-report=term-missing --cov-fail-under=50

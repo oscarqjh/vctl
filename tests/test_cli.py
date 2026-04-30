@@ -1,4 +1,5 @@
 """CLI dispatch + positional-profile shortcut tests."""
+
 from __future__ import annotations
 
 import subprocess

@@ -1,4 +1,5 @@
 """LB installer tests with mocked which/run."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -24,8 +25,11 @@ def test_ensure_haproxy_via_mamba(mock_run, mock_which) -> None:
 
 @patch("shutil.which", return_value=None)
 def test_ensure_haproxy_falls_through_to_error(mock_which) -> None:
-    with patch(
-        "vctl.lb.installer._build_from_source",
-        side_effect=RuntimeError("no toolchain"),
-    ), pytest.raises(RuntimeError):
+    with (
+        patch(
+            "vctl.lb.installer._build_from_source",
+            side_effect=RuntimeError("no toolchain"),
+        ),
+        pytest.raises(RuntimeError),
+    ):
         ensure_haproxy()

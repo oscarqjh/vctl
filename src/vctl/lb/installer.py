@@ -1,4 +1,5 @@
 """Locate or install haproxy."""
+
 from __future__ import annotations
 
 import logging
@@ -23,7 +24,9 @@ def _try_conda_install() -> str | None:
         try:
             subprocess.run(
                 [tool, "install", "-c", "conda-forge", "-y", "haproxy"],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             )
         except subprocess.CalledProcessError as e:
             _LOG.warning("%s install failed: %s", tool, e.stderr.strip()[:200])

@@ -1,4 +1,5 @@
 """`vctl config <verb>` end-to-end."""
+
 from __future__ import annotations
 
 import json
@@ -10,8 +11,9 @@ from pathlib import Path
 FIX = Path(__file__).parent / "fixtures"
 
 
-def _vctl(*args: str, cwd: Path | None = None,
-          env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+def _vctl(
+    *args: str, cwd: Path | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     cmd = [sys.executable, "-m", "vctl", *args]
     return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, env=env, timeout=10)
 
