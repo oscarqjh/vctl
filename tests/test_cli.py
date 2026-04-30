@@ -1,15 +1,15 @@
 """CLI dispatch + positional-profile shortcut tests."""
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 import time
 
 
 def _vctl(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    binary = shutil.which("vctl")
-    cmd = [binary, *args] if binary else [sys.executable, "-m", "vctl", *args]
+    # Always invoke the venv's vctl via `python -m` so we never accidentally
+    # exec a different `vctl` shim from PATH (e.g. the bash prototype symlink).
+    cmd = [sys.executable, "-m", "vctl", *args]
     return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=10)
 
 
