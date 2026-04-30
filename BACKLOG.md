@@ -1,13 +1,18 @@
 # Backlog
 
-## In progress (v0.1.0)
-- Repo scaffold, schema models, resolver, LB lifecycle, serve, tests, docs.
+## In progress
+- (v0.1.0 shipped)
 
-## Deferred
-- Prometheus metrics endpoint
-- Multi-cluster support
+## Up next (post-v0.1.0)
+- Prometheus metrics endpoint (`vctl lb metrics`)
+- Multi-cluster support (`~/.config/vctl/clusters/<name>.yaml` + `--cluster <name>`)
+
+## Ideas (unprioritized)
+- vLLM Router (cache-aware) as alternative `lb.kind`
+- Self-update check
 - Daemon mode for LB supervision
-- vLLM Router as alternative lb.kind
 - REST API for orchestration
 - Audit log
-- Self-update check
+- Hash-based sticky routing docs
+- Profile inheritance (`extends:`)
+- Dry-run mode for `serve`

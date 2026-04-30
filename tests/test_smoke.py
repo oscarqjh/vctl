@@ -31,3 +31,26 @@ def test_module_entry_point() -> None:
         timeout=5,
     )
     assert proc.returncode == 0
+
+
+def test_changelog_has_v0_1_0_section() -> None:
+    """AT-14: CHANGELOG follows Keep a Changelog with the v0.1.0 entry."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text()
+    assert "## [Unreleased]" in text
+    assert "## [0.1.0]" in text
+    assert any(h in text for h in ("### Added", "### Changed", "### Fixed"))
+
+
+def test_pyproject_version_matches_module_version() -> None:
+    from pathlib import Path  # noqa: PLC0415
+
+    import tomllib
+
+    repo = Path(__file__).resolve().parent.parent
+    pyproject = tomllib.loads((repo / "pyproject.toml").read_text())
+    pkg_version = pyproject["project"]["version"]
+    from vctl import __version__
+
+    assert pkg_version == __version__ == "0.1.0"

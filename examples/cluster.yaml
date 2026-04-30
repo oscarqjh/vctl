@@ -1,0 +1,16 @@
+apiVersion: vctl/v1
+kind: Cluster
+cluster:
+  venv: <path>          # e.g. /opt/venv or /mnt/data/.venv
+  state_dir: /tmp/vctl-state
+  env: {}
+profile: qwen3-vl-30b-a3b
+lb:
+  kind: haproxy
+  host: <lb-pod-ip>     # IP of the machine that runs HAProxy (not a GPU worker)
+  client: { bind_port: 8080 }
+  admin:  { bind_port: 9001 }
+  stats:  { bind_port: 9000 }
+  algorithm: leastconn
+  health:   { path: /health, check_interval: 5s, fall: 3, rise: 2 }
+  defaults: { maxconn_per_backend: 256, slowstart: 30s, timeout_connect: 5s, timeout_client: 1h, timeout_server: 1h }
