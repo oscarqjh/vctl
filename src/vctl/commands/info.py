@@ -1,11 +1,38 @@
-"""info command stub — replaced by Task 9."""
+"""`vctl info` — resolved config table."""
 
 from __future__ import annotations
 
 import argparse
-import sys
+
+from vctl.platform import detect_self_ip
+from vctl.resolver import resolve
 
 
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
-    print("info: not yet implemented", file=sys.stderr)
-    return 1
+    rc = resolve(ns.config, profile=ns.profile)
+    self_ip = detect_self_ip()
+    rows = [
+        ("profile", rc.profile_name),
+        ("model", rc.model.name),
+        ("served_as", rc.model.served_as),
+        ("self_ip", self_ip),
+        ("dp / tp", f"{rc.parallelism.data_parallel} / {rc.parallelism.tensor_parallel}"),
+        ("api_servers", str(rc.parallelism.api_server_count)),
+        ("vllm_port", str(rc.server.http_port)),
+        ("lb.host", rc.lb.host),
+        ("lb.client", str(rc.lb.client.bind_port)),
+        ("lb.admin", str(rc.lb.admin.bind_port)),
+        ("lb.stats", str(rc.lb.stats.bind_port)),
+        ("venv", rc.cluster.venv),
+        ("state_dir", rc.cluster.state_dir),
+    ]
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("key")
+    table.add_column("value")
+    for k, v in rows:
+        table.add_row(k, v)
+    Console().print(table)
+    return 0
