@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+import psutil
+
 FIX = Path(__file__).parent / "fixtures"
 
 
@@ -80,8 +82,13 @@ def test_serve_attach_then_sigint_exits_130(tmp_path: Path) -> None:
     }
     cmd = [sys.executable, "-m", "vctl", "--log-format", "json", "serve", "--skip-preflight"]
     proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    time.sleep(3)
+    # Poll for attach — process startup + readiness check can take >3s on slow CI.
     state_file = state_dir / "10.0.0.1_backends.txt"
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if state_file.exists() and state_file.read_text().strip():
+            break
+        time.sleep(0.5)
     assert state_file.exists(), f"attach should have registered (state_dir={state_dir})"
     assert state_file.read_text().strip(), "state file empty after attach"
 
@@ -89,3 +96,49 @@ def test_serve_attach_then_sigint_exits_130(tmp_path: Path) -> None:
     rc = proc.wait(timeout=15)
     assert rc == 130
     assert not state_file.read_text().strip(), "state file should be empty after detach"
+
+
+def test_serve_sigint_during_load_exits_130_no_orphans(tmp_path: Path) -> None:
+    """I-1: SIGINT during model loading must exit 130 and leave no orphaned children."""
+    repo = _make_repo(tmp_path)
+    bin_dir = _make_stub_vllm(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    port = _free_port()
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "VCTL_CLUSTER__STATE_DIR": str(state_dir),
+        "VCTL_TEST_NO_SOCKET": "1",
+        # Stub will not become ready for 60s — ensures SIGINT arrives before attach.
+        "STUB_READY_AFTER": "60",
+        "VCTL_SERVER__HTTP_PORT": str(port),
+        "VCTL_LB__CLIENT__BIND_PORT": "8080",
+        "LB_DETACH_WAIT": "3",
+        "VCTL_KILL_GRACE": "5",
+    }
+    cmd = [sys.executable, "-m", "vctl", "--log-format", "json", "serve", "--skip-preflight"]
+    proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # Collect child PIDs before sending signal so we can check for orphans.
+    time.sleep(1)
+    try:
+        children = psutil.Process(proc.pid).children(recursive=True)
+        child_pids = [c.pid for c in children]
+    except psutil.NoSuchProcess:
+        child_pids = []
+
+    # Send SIGINT while the stub is still in its "not-ready" phase.
+    proc.send_signal(signal.SIGINT)
+    rc = proc.wait(timeout=15)
+    assert rc == 130, f"expected exit 130, got {rc}"
+
+    # State file must NOT exist (process was never attached).
+    state_file = state_dir / "10.0.0.1_backends.txt"
+    if state_file.exists():
+        assert not state_file.read_text().strip(), "state file should be empty (never attached)"
+
+    # No orphaned children.
+    time.sleep(1)
+    for pid in child_pids:
+        assert not psutil.pid_exists(pid), f"child pid {pid} is still alive (orphan)"

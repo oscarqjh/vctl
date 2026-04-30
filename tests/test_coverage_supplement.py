@@ -302,7 +302,7 @@ def test_stop_run_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> No
 def test_find_local_vllm() -> None:
     from vctl.commands.stop import _find_local_vllm
 
-    pids = _find_local_vllm()
+    pids = _find_local_vllm(8000)
     assert isinstance(pids, list)
 
 

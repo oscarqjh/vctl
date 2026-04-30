@@ -65,25 +65,30 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     _LOG.info("spawning %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, env=env)
 
-    try:
-        _wait_for_ready(rc.server.http_port, timeout=120)
-    except TimeoutError as e:
-        _LOG.error("readiness timed out: %s", e)
-        _kill_tree(proc.pid)
-        return 1
-
+    # I-1: compute ep and install signal handlers BEFORE waiting for readiness so
+    # SIGINT during model loading does not orphan the vllm subprocess.
     self_ip = detect_self_ip()
     ep = f"{self_ip}:{rc.server.http_port}"
 
+    # Mutable cell: False until _do_add has succeeded.
+    state = {"attached": False}
+
     def _shutdown(signum: int, frame: object) -> None:
-        _LOG.info("signal %d received; draining + detaching", signum)
-        try:
-            lb_scaling._do_drain(ep, mgr)
-            _wait_for_idle(
-                rc.server.http_port, timeout=float(os.environ.get("LB_DETACH_WAIT", "30"))
-            )
-            lb_scaling._do_remove(ep, mgr, bs)
-        finally:
+        if state["attached"]:
+            _LOG.info("signal %d received; draining + detaching", signum)
+            try:
+                lb_scaling._do_drain(ep, mgr)
+                _wait_for_idle(
+                    rc.server.http_port,
+                    timeout=float(os.environ.get("LB_DETACH_WAIT", "30")),
+                )
+                lb_scaling._do_remove(ep, mgr, bs)
+            finally:
+                grace = float(os.environ.get("VCTL_KILL_GRACE", "30"))
+                _kill_tree(proc.pid, grace=grace)
+                sys.exit(130)
+        else:
+            _LOG.info("signal %d received during model load; reaping subprocess", signum)
             grace = float(os.environ.get("VCTL_KILL_GRACE", "30"))
             _kill_tree(proc.pid, grace=grace)
             sys.exit(130)
@@ -92,7 +97,15 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGHUP, _shutdown)
 
+    try:
+        _wait_for_ready(rc.server.http_port, timeout=120)
+    except TimeoutError as e:
+        _LOG.error("readiness timed out: %s", e)
+        _kill_tree(proc.pid)
+        return 1
+
     lb_scaling._do_add(ep, mgr, bs)
+    state["attached"] = True
     # Poll with a short timeout so Python signal handlers can fire between iterations.
     while True:
         try:

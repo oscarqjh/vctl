@@ -19,11 +19,21 @@ def _backend_name(ep: str) -> str:
 
 
 def render_haproxy_cfg(lb: LbHaproxy, paths: RuntimePaths, backends: list[str]) -> str:
+    # C-2: map algorithm string to valid HAProxy balance directive
+    algo = lb.algorithm
+    if algo.startswith("hdr:"):
+        balance = f"balance hdr({algo[len('hdr:') :]})"
+    elif algo == "random":
+        balance = "balance random(2)"
+    else:
+        balance = f"balance {algo}"
+
     lines: list[str] = []
     lines += [
         "global",
-        "    log /dev/log local0",
-        f"    stats socket {paths.unix_socket} mode 660 level admin",
+        "    log stdout format raw local0",
+        f"    stats socket {paths.unix_socket} mode 660 level admin expose-fd listeners",
+        f"    stats socket ipv4@*:{lb.admin.bind_port} level admin",
         "    stats timeout 30s",
         "defaults",
         "    mode http",
@@ -36,7 +46,7 @@ def render_haproxy_cfg(lb: LbHaproxy, paths: RuntimePaths, backends: list[str]) 
         f"    bind *:{lb.client.bind_port}",
         "    default_backend pool",
         "backend pool",
-        f"    balance {lb.algorithm}",
+        f"    {balance}",
         f"    option httpchk GET {lb.health.path}",
     ]
     for ep in backends:
@@ -50,12 +60,5 @@ def render_haproxy_cfg(lb: LbHaproxy, paths: RuntimePaths, backends: list[str]) 
         f"    bind *:{lb.stats.bind_port}",
         "    stats enable",
         "    stats uri /",
-        "frontend admin",
-        f"    bind *:{lb.admin.bind_port}",
-        "    mode tcp",
-        "    default_backend admin_backend",
-        "backend admin_backend",
-        "    mode tcp",
-        f"    server admin {paths.unix_socket}",
     ]
     return "\n".join(lines) + "\n"

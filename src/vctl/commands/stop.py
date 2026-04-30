@@ -23,13 +23,19 @@ def _build_subparser() -> argparse.ArgumentParser:
     return p
 
 
-def _find_local_vllm() -> list[int]:
+def _find_local_vllm(port: int) -> list[int]:
     pids: list[int] = []
+    port_flag = f"--port={port}"
     for p in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
             cmd = p.info.get("cmdline") or []
-            if cmd and "vllm" in cmd[0] and "serve" in cmd:
-                pids.append(p.info["pid"])
+            if not cmd or "vllm" not in cmd[0]:
+                continue
+            if "serve" not in cmd:
+                continue
+            if not any(arg == port_flag for arg in cmd):
+                continue
+            pids.append(p.info["pid"])
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return pids
@@ -53,7 +59,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         lb_scaling._do_remove(ep, mgr, bs)
         actions.append(f"removed {ep}")
 
-    for pid in _find_local_vllm():
+    for pid in _find_local_vllm(rc.server.http_port):
         _kill_tree(pid)
         actions.append(f"killed pid {pid}")
 
