@@ -1,0 +1,12 @@
+apiVersion: vctl/v1
+kind: Profile
+model: { name: Qwen/Qwen3-VL-30B-A3B-Thinking, served_as: qwen3-vl-30b-a3b-thinking }
+resources: { num_gpus: 8, cuda_visible_devices: "0,1,2,3,4,5,6,7" }
+parallelism: { data_parallel: 4, tensor_parallel: 2, api_server_count: 4 }
+server: { http_port: 8000 }
+vllm_args:
+  mm-encoder-tp-mode: data
+  reasoning-parser: qwen3
+  enable-prefix-caching: true
+env:
+  VLLM_ENGINE_READY_TIMEOUT_S: 3000

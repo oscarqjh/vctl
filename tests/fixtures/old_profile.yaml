@@ -1,0 +1,13 @@
+model: Qwen/Qwen3-VL-30B-A3B-Thinking
+gpus: 8
+dp_size: 4
+tp_size: 2
+api_server_count: 4
+cuda_visible_devices: "0,1,2,3,4,5,6,7"
+http_port: 8000
+vllm_args:
+  mm-encoder-tp-mode: data
+  reasoning-parser: qwen3
+  enable-prefix-caching: true
+env:
+  VLLM_ENGINE_READY_TIMEOUT_S: 3000

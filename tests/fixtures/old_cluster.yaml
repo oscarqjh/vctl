@@ -1,0 +1,19 @@
+profile: qwen3-vl-30b-a3b
+venv: /mnt/umm/users/qianjianheng/workspace/vllm_test/.venv_0_19_2rc1
+lb:
+  host: 10.119.30.181
+  bind_port: 8080
+  admin_port: 9001
+  stats_port: 9000
+  algorithm: leastconn
+  health_path: /health
+  check_interval: 5s
+  fall: 3
+  rise: 2
+  maxconn_per_backend: 256
+  slowstart: 30s
+  timeout_connect: 5s
+  timeout_client: 1h
+  timeout_server: 1h
+  state_dir: /mnt/aigc/users/qianjianheng/.vllm-lb-state
+env: {}
