@@ -4,7 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from vctl.config.models import (
-    LbAdmin, LbClient, LbDefaults, LbHaproxy, LbHealth, LbStats,
+    LbAdmin,
+    LbClient,
+    LbDefaults,
+    LbHaproxy,
+    LbHealth,
+    LbStats,
 )
 from vctl.lb.render import RuntimePaths, render_haproxy_cfg
 
