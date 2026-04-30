@@ -1,0 +1,75 @@
+"""Cluster + profile + env merge into a frozen ResolvedConfig."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from vctl.config.models import (
+    ClusterSection,
+    LbHaproxy,
+    Model,
+    Parallelism,
+    Resources,
+    Server,
+)
+from vctl.config.settings import (
+    load_cluster_file,
+    load_profile_file,
+    resolve_profile_name,
+)
+
+
+@dataclass(frozen=True)
+class ResolvedConfig:
+    profile_name: str
+    cluster: ClusterSection
+    lb: LbHaproxy
+    model: Model
+    resources: Resources
+    parallelism: Parallelism
+    server: Server
+    vllm_args: dict[str, Any]
+    env: dict[str, Any]
+    cluster_path: Path
+    profile_path: Path
+
+
+def _deep_merge(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    out = dict(a)
+    for k, v in b.items():
+        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def resolve(config_path: Path | str, profile: str | None) -> ResolvedConfig:
+    cluster_path = Path(config_path).resolve()
+    cf = load_cluster_file(cluster_path)
+    profile_name = resolve_profile_name(profile, cf.profile)
+    profile_path = (cluster_path.parent / "models" / f"{profile_name}.yaml").resolve()
+    if not profile_path.exists():
+        raise FileNotFoundError(
+            f"profile '{profile_name}' not found at {profile_path}; "
+            "see `vctl profiles` for available choices"
+        )
+    pf = load_profile_file(profile_path)
+    merged_env = _deep_merge(cf.cluster.env or {}, pf.env or {})
+    if not isinstance(cf.lb, LbHaproxy):
+        raise TypeError(f"unsupported lb.kind {cf.lb.kind!r}")
+    return ResolvedConfig(
+        profile_name=profile_name,
+        cluster=cf.cluster,
+        lb=cf.lb,
+        model=pf.model,
+        resources=pf.resources,
+        parallelism=pf.parallelism,
+        server=pf.server,
+        vllm_args=dict(pf.vllm_args),
+        env=merged_env,
+        cluster_path=cluster_path,
+        profile_path=profile_path,
+    )
