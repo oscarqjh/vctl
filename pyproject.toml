@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vctl"
+version = "0.1.0"
+description = "Typed CLI for orchestrating a multi-pod vLLM fleet behind HAProxy."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "vctl maintainers" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "pydantic>=2.6,<3",
+    "pydantic-settings>=2.1,<3",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "psutil>=5.9",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+migrate = ["ruamel.yaml>=0.18"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+
+[project.scripts]
+vctl = "vctl.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/example-org/vctl"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vctl"]
+
+[tool.pytest.ini_options]
+addopts = "-ra -q"
+testpaths = ["tests"]
+markers = [
+    "integration: requires a real haproxy binary on PATH",
+]
