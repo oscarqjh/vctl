@@ -39,10 +39,14 @@ def _build_subparser() -> argparse.ArgumentParser:
     sp.add_parser("auto-add")
     add = sp.add_parser("add")
     add.add_argument("endpoint")
+    add.add_argument(
+        "--pool", default=None, help="explicit pool name (default: auto by /v1/models probe)"
+    )
     rm = sp.add_parser("remove")
     rm.add_argument("endpoint")
     dr = sp.add_parser("drain")
     dr.add_argument("endpoint")
+    dr.add_argument("--pool", default=None, help="explicit pool name")
     at = sp.add_parser("attach")
     at.add_argument("port", type=int, nargs="?")
     sp.add_parser("detach")

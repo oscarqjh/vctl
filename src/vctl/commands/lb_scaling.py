@@ -39,11 +39,11 @@ def dispatch(
     verb: str, parsed: argparse.Namespace, ns: argparse.Namespace, mgr: LbManager, bs: BackendState
 ) -> int:
     if verb == "add":
-        return _do_add(parsed.endpoint, mgr, bs)
+        return _do_add_cli(parsed.endpoint, mgr, bs, getattr(parsed, "pool", None))
     if verb == "remove":
-        return _do_remove(parsed.endpoint, mgr, bs)
+        return _do_remove_cli(parsed.endpoint, mgr, bs)
     if verb == "drain":
-        return _do_drain(parsed.endpoint, mgr)
+        return _do_drain(parsed.endpoint, mgr, pool_name=getattr(parsed, "pool", None))
     if verb == "attach":
         port = parsed.port or 8000
         return _do_attach(port, mgr, bs)
@@ -55,6 +55,35 @@ def dispatch(
         return _do_health(mgr, bs)
     print(f"unknown lb verb: {verb}", file=sys.stderr)
     return 2
+
+
+def _do_add_cli(ep: str, mgr: LbManager, bs: BackendState, requested_pool: str | None) -> int:
+    """User-invoked ``lb add``.  If ``--pool`` given, use it.
+    Otherwise: single pool → use it; multi-pool → probe ep for model.
+    """
+    if requested_pool:
+        pool_name = requested_pool  # _resolve_pool_name in _do_add validates
+    elif len(mgr.lb.pools) == 1:
+        pool_name = mgr.lb.pools[0].name
+    else:
+        pool = pool_for_endpoint(mgr.lb, ep)
+        pool_name = pool.name
+    pbs = BackendState(bs.state_dir, bs.lb_host, pool=pool_name)
+    return _do_add(ep, mgr, pbs, pool_name=pool_name)
+
+
+def _do_remove_cli(ep: str, mgr: LbManager, bs: BackendState) -> int:
+    """User-invoked ``lb remove``. Scan all pools for the ep."""
+    pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
+    if not pool_names:
+        pool_names = [p.name for p in mgr.lb.pools]
+    for pname in pool_names:
+        pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
+        if ep in pbs.list():
+            return _do_remove(ep, mgr, pbs, pool_name=pname)
+    # Not found in any pool — endpoint may have already been removed.
+    print(f"endpoint {ep} not found in any pool state file", file=sys.stderr)
+    return 0
 
 
 def _resolve_pool_name(mgr: LbManager, requested: str | None) -> str:
