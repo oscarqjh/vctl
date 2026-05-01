@@ -88,7 +88,7 @@ uv tool install git+https://github.com/oscarqjh/vctl.git
 
 # Verify
 which vctl              # → ~/.local/share/uv/tools/vctl/bin/vctl
-vctl --version          # → vctl 0.1.0
+vctl --version          # → vctl 0.2.0
 vctl --help             # see subcommand tree
 ```
 

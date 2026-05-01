@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vctl"
-version = "0.1.0"
+version = "0.2.0"
 description = "Typed CLI for orchestrating a multi-pod vLLM fleet behind HAProxy."
 readme = "README.md"
 license = { file = "LICENSE" }

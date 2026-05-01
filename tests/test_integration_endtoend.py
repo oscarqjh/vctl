@@ -62,7 +62,8 @@ def test_haproxy_two_pools_with_distinct_backends(tmp_path: Path) -> None:
     from vctl.lb.state import BackendState
 
     lb = LbHaproxy(
-        kind="haproxy", host="127.0.0.1",
+        kind="haproxy",
+        host="127.0.0.1",
         admin=LbAdmin(bind_port=19001),
         stats=LbStats(bind_port=19000),
         algorithm="leastconn",

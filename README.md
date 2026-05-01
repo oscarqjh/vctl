@@ -12,7 +12,7 @@ uv tool install git+https://github.com/oscarqjh/vctl.git
 
 Pin to a release tag (recommended):
 ```bash
-uv tool install git+https://github.com/oscarqjh/vctl.git@v0.1.0
+uv tool install git+https://github.com/oscarqjh/vctl.git@v0.2.0
 ```
 
 To include the optional migration helper (converts the old bash-prototype YAML to `vctl/v1`):
