@@ -131,11 +131,11 @@ class LbManager:
 
         # 2. admin port reachable
         admin_reachable = False
-        with contextlib.suppress(OSError):
-            with socket.create_connection(
-                (self.lb.host, self.lb.admin.bind_port), timeout=2
-            ):
-                admin_reachable = True
+        with (
+            contextlib.suppress(OSError),
+            socket.create_connection((self.lb.host, self.lb.admin.bind_port), timeout=2),
+        ):
+            admin_reachable = True
 
         # 3. tmux-managed (informational only)
         tmux_managed = tmux_session_exists(_TMUX_NAME)

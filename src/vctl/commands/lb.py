@@ -61,24 +61,30 @@ def _build_subparser() -> argparse.ArgumentParser:
         sp.add_parser(verb, help=_LB_VERB_HELP[verb])
     # Verbs with args / flags.
     start = sp.add_parser("start", help=_LB_VERB_HELP["start"])
-    start.add_argument("--force", action="store_true",
-                       help="start even if this pod's IP != lb.host")
+    start.add_argument(
+        "--force", action="store_true", help="start even if this pod's IP != lb.host"
+    )
     wr = sp.add_parser("wait-ready", help=_LB_VERB_HELP["wait-ready"])
-    wr.add_argument("count", type=int, nargs="?", default=1,
-                    help="minimum ready backends per non-empty pool (default: 1)")
+    wr.add_argument(
+        "count",
+        type=int,
+        nargs="?",
+        default=1,
+        help="minimum ready backends per non-empty pool (default: 1)",
+    )
     wr.add_argument("--pool", default=None, help="scope to a single pool")
     add = sp.add_parser("add", help=_LB_VERB_HELP["add"])
     add.add_argument("endpoint", help="ip:port to add")
-    add.add_argument("--pool", default=None,
-                     help="explicit pool name (default: auto by /v1/models probe)")
+    add.add_argument(
+        "--pool", default=None, help="explicit pool name (default: auto by /v1/models probe)"
+    )
     rm = sp.add_parser("remove", help=_LB_VERB_HELP["remove"])
     rm.add_argument("endpoint", help="ip:port to remove")
     dr = sp.add_parser("drain", help=_LB_VERB_HELP["drain"])
     dr.add_argument("endpoint", help="ip:port to drain")
     dr.add_argument("--pool", default=None, help="explicit pool name")
     at = sp.add_parser("attach", help=_LB_VERB_HELP["attach"])
-    at.add_argument("port", type=int, nargs="?",
-                    help="local vllm port to probe (default: 8000)")
+    at.add_argument("port", type=int, nargs="?", help="local vllm port to probe (default: 8000)")
     return p
 
 

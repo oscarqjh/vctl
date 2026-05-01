@@ -36,12 +36,13 @@ In order:
 1. `--config <path>` CLI flag
 2. `CLUSTER_CONFIG` env var
 3. `./cluster.yaml` (current directory)
-4. `~/vctl-cfg/cluster.yaml` (default after `vctl init-config`)
+4. `~/.vctl/cluster.yaml` (canonical default — co-located with runtime artifacts under `~/.vctl/lb/`)
+5. `~/vctl-cfg/cluster.yaml` (legacy default — kept as transparent BC fallback)
 
 Bootstrap a config in the default location so `vctl` works from any directory:
 
 ```bash
-vctl init-config --dir ~/vctl-cfg
+vctl init-config         # writes to ~/.vctl/ by default
 ```
 
 Now `vctl info`, `vctl serve`, etc. work from any directory.
@@ -52,15 +53,17 @@ Now `vctl info`, `vctl serve`, etc. work from any directory.
 
 ### 0. Bootstrap your config (recommended)
 
-The fastest way to start is with `vctl init-config`, which scaffolds a fully-documented `cluster.yaml` and a default set of model profiles:
+The fastest way to start is with `vctl init-config`, which scaffolds a fully-documented `cluster.yaml` and a default set of model profiles into `~/.vctl/`:
 
 ```bash
-vctl init-config --dir ~/vctl-cfg
+vctl init-config
 # Created:
-#   ~/vctl-cfg/cluster.yaml
-#   ~/vctl-cfg/models/qwen3_5-9b.yaml
-#   ~/vctl-cfg/models/qwen3-vl-30b-a3b.yaml
+#   ~/.vctl/cluster.yaml
+#   ~/.vctl/models/qwen3_5-9b.yaml
+#   ~/.vctl/models/qwen3-vl-30b-a3b.yaml
 ```
+
+Runtime artifacts (haproxy.cfg, haproxy.pid, haproxy.sock) live alongside under `~/.vctl/lb/` — single home for everything vctl-related.
 
 Every field is documented inline. Edit `cluster.yaml` to set `lb.host`, `cluster.venv`, and `cluster.state_dir` for your environment, then pick a profile as your default.
 

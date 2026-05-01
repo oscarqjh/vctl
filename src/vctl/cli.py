@@ -32,7 +32,9 @@ _PROFILE_AWARE = {"info", "serve", "args", "preflight", "stop"}
 _CONFIG_SENTINEL = "<auto>"
 
 # Default home location for `uv tool install`-ed users.
-_CONFIG_DEFAULT_HOME = Path.home() / "vctl-cfg" / "cluster.yaml"
+_VCTL_HOME = Path.home() / ".vctl"
+_CONFIG_DEFAULT_HOME = _VCTL_HOME / "cluster.yaml"
+_CONFIG_LEGACY_HOME = Path.home() / "vctl-cfg" / "cluster.yaml"  # pre-unification
 
 
 def _resolve_config_path(cli_arg: str | None) -> str:
@@ -41,8 +43,11 @@ def _resolve_config_path(cli_arg: str | None) -> str:
     Order:
       1. --config flag
       2. CLUSTER_CONFIG env var
-      3. ./cluster.yaml (cwd, back-compat)
-      4. ~/vctl-cfg/cluster.yaml (default for `uv tool install`-ed users)
+      3. ./cluster.yaml (cwd, back-compat for repo-local workflows)
+      4. ~/.vctl/cluster.yaml (canonical default — co-located with runtime
+         artifacts under ~/.vctl/lb/)
+      5. ~/vctl-cfg/cluster.yaml (legacy default before unification — kept
+         as a transparent BC fallback so existing setups keep working)
     Returns the chosen path even if it doesn't exist; let the loader raise
     a clear FileNotFoundError naming candidates that were tried.
     """
@@ -54,6 +59,12 @@ def _resolve_config_path(cli_arg: str | None) -> str:
     cwd_cfg = Path.cwd() / "cluster.yaml"
     if cwd_cfg.is_file():
         return str(cwd_cfg)
+    if _CONFIG_DEFAULT_HOME.is_file():
+        return str(_CONFIG_DEFAULT_HOME)
+    if _CONFIG_LEGACY_HOME.is_file():
+        return str(_CONFIG_LEGACY_HOME)
+    # Default to the canonical location (loader will produce a clear error
+    # naming all candidates).
     return str(_CONFIG_DEFAULT_HOME)
 
 
@@ -63,9 +74,10 @@ def _config_path_error_message() -> str:
         f"  --config flag (not provided)\n"
         f"  CLUSTER_CONFIG env (={os.environ.get('CLUSTER_CONFIG', '<unset>')})\n"
         f"  {Path.cwd() / 'cluster.yaml'}\n"
-        f"  {_CONFIG_DEFAULT_HOME}\n"
+        f"  {_CONFIG_DEFAULT_HOME}  (canonical default)\n"
+        f"  {_CONFIG_LEGACY_HOME}  (legacy default — pre-v0.2.x)\n"
         f"\n"
-        f"Run `vctl init-config --dir ~/vctl-cfg` to bootstrap one."
+        f"Run `vctl init-config` to bootstrap one at {_CONFIG_DEFAULT_HOME.parent}/."
     )
 
 
@@ -89,9 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
         # command module's own subparser (which knows its real verbs/flags).
         # Otherwise argparse prints an empty shallow help here and never
         # reaches the actual command's argparse.
-        sp = sub.add_parser(
-            name, help=f"see `vctl {name} --help`", add_help=False
-        )
+        sp = sub.add_parser(name, help=f"see `vctl {name} --help`", add_help=False)
         sp.set_defaults(_subname=name)
     return p
 

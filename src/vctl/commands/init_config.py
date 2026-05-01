@@ -8,10 +8,16 @@ from pathlib import Path
 
 from vctl.commands.templates import CLUSTER_TEMPLATE, PROFILE_TEMPLATES
 
+_DEFAULT_TARGET_DIR = str(Path.home() / ".vctl")
+
 
 def _build_subparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vctl init-config")
-    p.add_argument("--dir", default=".", help="target directory (default: cwd)")
+    p.add_argument(
+        "--dir",
+        default=_DEFAULT_TARGET_DIR,
+        help=f"target directory (default: {_DEFAULT_TARGET_DIR})",
+    )
     p.add_argument("--force", action="store_true", help="overwrite existing files")
     p.add_argument(
         "--profiles",
