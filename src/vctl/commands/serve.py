@@ -78,7 +78,11 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     venv_bin = str(Path(rc.cluster.venv) / "bin")
     env["PATH"] = f"{venv_bin}:{env['PATH']}"
     for k, v in rc.env.items():
-        env[k] = str(v)
+        # D12: booleans must serialize as "true"/"false" (lowercase) for env export
+        if isinstance(v, bool):
+            env[k] = "true" if v else "false"
+        else:
+            env[k] = str(v)
 
     cmd = [
         "vllm",
@@ -99,7 +103,9 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
             cmd.append(f"--{k}={v}")
 
     _LOG.info("spawning %s", " ".join(cmd))
-    proc = subprocess.Popen(cmd, env=env)
+    # D11: start_new_session=True gives vllm its own PGID so SIGINT to vctl
+    # doesn't double-deliver to the vllm child via the terminal process group.
+    proc = subprocess.Popen(cmd, env=env, start_new_session=True)
 
     # I-1: compute ep and install signal handlers BEFORE waiting for readiness so
     # SIGINT during model loading does not orphan the vllm subprocess.
@@ -221,7 +227,11 @@ def _kill_tree(pid: int, grace: float = 30.0) -> None:
         root = psutil.Process(pid)
     except psutil.NoSuchProcess:
         return
-    children = root.children(recursive=True)
+    # D10: root may have exited between Process() and children(); tolerate that.
+    try:
+        children = root.children(recursive=True)
+    except psutil.NoSuchProcess:
+        children = []
     for p in [root, *children]:
         with contextlib.suppress(psutil.NoSuchProcess):
             p.terminate()

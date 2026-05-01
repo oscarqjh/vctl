@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -46,12 +47,21 @@ def _apply_env_overrides(
         parts = key.split(ENV_DELIM)
         if not parts or parts == [""]:
             continue
+        # D2: reject empty key segments (e.g. VCTL_LB__=8080, VCTL___HOST=x)
+        if any(p == "" for p in parts):
+            raise ValueError(f"VCTL env var {raw_key!r} has empty key segment")
         if allowed_toplevel is not None and parts[0] not in allowed_toplevel:
             continue
         cursor = out
         for piece in parts[:-1]:
             nxt = cursor.get(piece)
             if not isinstance(nxt, dict):
+                # D1: if the YAML already set this as a non-mapping leaf, hard error
+                if nxt is not None:
+                    raise ValueError(
+                        f"VCTL env var {raw_key!r} tries to descend into non-mapping at"
+                        f" {piece!r} (existing value is a {type(nxt).__name__})"
+                    )
                 nxt = {}
                 cursor[piece] = nxt
             cursor = nxt
@@ -63,14 +73,11 @@ def _coerce_scalar(s: str) -> Any:
     low = s.strip().lower()
     if low in ("true", "false"):
         return low == "true"
-    try:
+    # D3: strict patterns — reject nan, inf, scientific notation, hex, etc.
+    if re.fullmatch(r"-?\d+", s.strip()):
         return int(s)
-    except ValueError:
-        pass
-    try:
+    if re.fullmatch(r"-?\d+\.\d+", s.strip()):
         return float(s)
-    except ValueError:
-        pass
     return s
 
 

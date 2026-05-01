@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,19 +38,49 @@ class ResolvedConfig:
 
 
 def _deep_merge(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    """Merge *b* onto *a* recursively.
+
+    Rules:
+    - If both values are dicts, recurse.
+    - None in *b* deletes the key from the merged result (lets profiles
+      unset cluster-level env vars).
+    - Any other value in *b* overwrites *a*.
+    """
     out = dict(a)
     for k, v in b.items():
-        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+        if v is None:
+            # D4: None in b means "delete this key from the merged output"
+            out.pop(k, None)
+        elif k in out and isinstance(out[k], dict) and isinstance(v, dict):
             out[k] = _deep_merge(out[k], v)
         else:
             out[k] = v
     return out
 
 
+_VALID_PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./-]*")
+
+
+def _validate_profile_name(profile_name: str) -> None:
+    """D8: Reject profile names containing path-traversal characters.
+
+    Allowed: alphanumeric, underscore, hyphen, dot (not leading), slash only
+    in the middle (but checked below).  Concretely, any name that doesn't
+    match ``[A-Za-z0-9][A-Za-z0-9_.-]*`` is invalid.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-]*", profile_name):
+        raise ValueError(
+            f"invalid profile name {profile_name!r}; "
+            "must be alphanumeric with -/_ (no leading dot, no slash, no ..)"
+        )
+
+
 def resolve(config_path: Path | str, profile: str | None) -> ResolvedConfig:
     cluster_path = Path(config_path).resolve()
     cf = load_cluster_file(cluster_path)
     profile_name = resolve_profile_name(profile, cf.profile)
+    # D8: reject path-traversal in profile names
+    _validate_profile_name(profile_name)
     profile_path = (cluster_path.parent / "models" / f"{profile_name}.yaml").resolve()
     if not profile_path.exists():
         raise FileNotFoundError(

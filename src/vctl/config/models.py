@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ApiVersion = Literal["vctl/v1"]
+
+# D6: reusable port type alias — ports must be 1-65535
+_Port = Annotated[int, Field(ge=1, le=65535)]
 
 
 class _Strict(BaseModel):
@@ -14,28 +18,46 @@ class _Strict(BaseModel):
 
 
 class ClusterSection(_Strict):
-    venv: str
-    state_dir: str
-    env: dict[str, Any] = Field(default_factory=dict)
+    venv: Annotated[str, Field(min_length=1)]
+    state_dir: Annotated[str, Field(min_length=1)]
+    env: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+    # D7: expand ~ in venv and state_dir
+    @field_validator("venv", "state_dir", mode="before")
+    @classmethod
+    def _expand_user(cls, v: object) -> object:
+        if isinstance(v, str):
+            if not v:
+                raise ValueError("must not be empty")
+            return os.path.expanduser(v)
+        return v
 
 
 class LbClient(_Strict):
-    bind_port: int
+    bind_port: _Port
 
 
 class LbAdmin(_Strict):
-    bind_port: int
+    bind_port: _Port
 
 
 class LbStats(_Strict):
-    bind_port: int
+    bind_port: _Port
 
 
 class LbHealth(_Strict):
     path: str = "/health"
     check_interval: str = "5s"
-    fall: int = 3
-    rise: int = 2
+    fall: int = Field(default=3, ge=1)  # D6
+    rise: int = Field(default=2, ge=1)  # D6
+
+    # D6: health path must start with /
+    @field_validator("path", mode="after")
+    @classmethod
+    def _path_starts_with_slash(cls, v: str) -> str:
+        if not v.startswith("/"):
+            raise ValueError("health path must start with '/'")
+        return v
 
 
 class LbDefaults(_Strict):
@@ -48,13 +70,13 @@ class LbDefaults(_Strict):
 
 class Pool(_Strict):
     name: str
-    served_model: str  # exact model id; "*" wildcard for synthesized default
-    bind_port: int
+    served_model: Annotated[str, Field(min_length=1)]  # D9: no empty served_model
+    bind_port: _Port  # D6
 
 
 class LbHaproxy(_Strict):
     kind: Literal["haproxy"] = "haproxy"
-    host: str
+    host: Annotated[str, Field(min_length=1)]  # D9: no empty host
     client: LbClient | None = None  # legacy single-pool field
     admin: LbAdmin
     stats: LbStats
@@ -96,18 +118,18 @@ Lb = Annotated[LbHaproxy, Field(discriminator="kind")]
 
 
 class Resources(_Strict):
-    num_gpus: int
+    num_gpus: int = Field(ge=0)  # D6: no negative GPU counts
     cuda_visible_devices: str
 
 
 class Parallelism(_Strict):
-    data_parallel: int
-    tensor_parallel: int
-    api_server_count: int
+    data_parallel: int = Field(ge=1)  # D6: must be >= 1
+    tensor_parallel: int = Field(ge=1)  # D6
+    api_server_count: int = Field(ge=1)  # D6
 
 
 class Server(_Strict):
-    http_port: int = 8000
+    http_port: _Port = 8000  # D6
 
 
 class Model(_Strict):
@@ -145,4 +167,4 @@ class ProfileFile(BaseModel):
     parallelism: Parallelism
     server: Server = Field(default_factory=Server)
     vllm_args: dict[str, Any] = Field(default_factory=dict)
-    env: dict[str, Any] = Field(default_factory=dict)
+    env: dict[str, str | int | float | bool] = Field(default_factory=dict)  # D12

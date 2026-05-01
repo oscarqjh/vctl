@@ -44,19 +44,19 @@
 - [x] C12: `templates.py` ships hard-coded `/mnt/umm/...` and `/mnt/aigc/...` site-specific paths — replace with `<EDIT_ME>` sentinels or `${HOME}` template
 
 ### Commit D — env / coerce / resolver hardening
-- [ ] D1: env override silently overwrites scalar with dict (`VCTL_LB__HOST__FOO=1` clobbers `lb.host`) — raise ValueError on non-mapping descent (settings.py:16-37)
-- [ ] D2: env override empty key segments produce cryptic Pydantic errors — reject any empty segment (settings.py:26-28)
-- [ ] D3: `_coerce_scalar` accepts `nan/inf/1e3` — restrict ints to `re.fullmatch(r"-?\d+", s)` and floats to `r"-?\d+\.\d+"` (settings.py:40-52)
-- [ ] D4: `_deep_merge` None override becomes literal `"None"` env var via `serve.py str(v)` — treat None in `b` as "delete key from out" (resolver.py:60-61)
-- [ ] D5: `detect_self_ip` no fallback (air-gapped fail) — fall back to `gethostbyname(gethostname())` then `127.0.0.1` (platform.py:10-17)
-- [ ] D6: pydantic missing range constraints — `bind_port: ge=1,le=65535`; `num_gpus: ge=0`; `data_parallel/tensor_parallel/api_server_count: ge=1`; `fall/rise: ge=1` (models.py:23-110)
-- [ ] D7: `cluster.venv`/`state_dir` no `~` expansion — field_validator with `os.path.expanduser` (models.py:17-19)
-- [ ] D8: `--profile` no path-traversal sanitation — reject names with `/`, `..`, leading `.` (resolver.py:49-58)
-- [ ] D9: `LbHaproxy.host`/`Pool.served_model` accept empty string — `min_length=1` (models.py:50-90)
-- [ ] D10: `_kill_tree` `root.children(recursive=True)` raises NoSuchProcess on dead root — wrap in try (serve.py:154-167)
-- [ ] D11: `serve` Popen no `start_new_session=True` — SIGINT to parent double-delivers via PGID (serve.py:72)
-- [ ] D12: `rc.env` `True` → `"True"` (capital) breaks env vars — pydantic-validate types to str|int|float|bool, lowercase booleans
-- [ ] D13: yaml duplicate-key tolerance — custom SafeLoader that errors on duplicates (yaml_source.py:11-16)
+- [x] D1: env override silently overwrites scalar with dict (`VCTL_LB__HOST__FOO=1` clobbers `lb.host`) — raise ValueError on non-mapping descent (settings.py:16-37)
+- [x] D2: env override empty key segments produce cryptic Pydantic errors — reject any empty segment (settings.py:26-28)
+- [x] D3: `_coerce_scalar` accepts `nan/inf/1e3` — restrict ints to `re.fullmatch(r"-?\d+", s)` and floats to `r"-?\d+\.\d+"` (settings.py:40-52)
+- [x] D4: `_deep_merge` None override becomes literal `"None"` env var via `serve.py str(v)` — treat None in `b` as "delete key from out" (resolver.py:60-61)
+- [x] D5: `detect_self_ip` no fallback (air-gapped fail) — fall back to `gethostbyname(gethostname())` then `127.0.0.1` (platform.py:10-17)
+- [x] D6: pydantic missing range constraints — `bind_port: ge=1,le=65535`; `num_gpus: ge=0`; `data_parallel/tensor_parallel/api_server_count: ge=1`; `fall/rise: ge=1` (models.py:23-110)
+- [x] D7: `cluster.venv`/`state_dir` no `~` expansion — field_validator with `os.path.expanduser` (models.py:17-19)
+- [x] D8: `--profile` no path-traversal sanitation — reject names with `/`, `..`, leading `.` (resolver.py:49-58)
+- [x] D9: `LbHaproxy.host`/`Pool.served_model` accept empty string — `min_length=1` (models.py:50-90)
+- [x] D10: `_kill_tree` `root.children(recursive=True)` raises NoSuchProcess on dead root — wrap in try (serve.py:154-167)
+- [x] D11: `serve` Popen no `start_new_session=True` — SIGINT to parent double-delivers via PGID (serve.py:72)
+- [x] D12: `rc.env` `True` → `"True"` (capital) breaks env vars — pydantic-validate types to str|int|float|bool, lowercase booleans
+- [x] D13: yaml duplicate-key tolerance — custom SafeLoader that errors on duplicates (yaml_source.py:11-16)
 
 ### Commit E — security
 - [ ] E1: HAProxy admin TCP socket bound `*:9001` with `level admin`, no ACL → LAN takeover. Bind to 127.0.0.1 OR add ACL src netmask OR doc loudly (render.py:60-61)
