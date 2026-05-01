@@ -3,7 +3,105 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
-## [Unreleased]
+## [0.2.1] - 2026-05-02
+
+Hardening sweep — 48 fixes from a multi-axis code review (correctness, UX, security).
+No schema breakage; existing v0.2.0 configs continue to load. New optional fields
+(`lb.admin.bind_addr`) default to backwards-compatible behavior.
+
+### Fixed (v0.2.1 hardening — Commit A: stop/serve/scaling correctness)
+- **A1+A2 — `vctl stop` multi-pool:** iterate every pool from `BackendState.list_pools`
+  and drain+remove every matching endpoint. Was: hardcoded `default` pool, crashed
+  with `ValueError` on multi-pool configs.
+- **A3 — `serve` ready timeout:** read from `VLLM_ENGINE_READY_TIMEOUT_S` (template
+  env var) → `VCTL_READY_TIMEOUT` → default 1800s. Was: hardcoded 120s, killed 30B
+  model loads mid-weight-load.
+- **A4 — `lb drain` LB-down handling:** raises and exits 4 when the admin socket is
+  unreachable. Was: silent no-op masquerading as success.
+- **A5 — `lb add` error propagation:** non-idempotent admin-socket errors are now
+  surfaced (exit 3 for "No such backend", 1 for generic). State file is rolled back
+  on failure. Was: any error swallowed and reported as success.
+- **A6 — `lb remove` ordering:** `set_state maint` → `remove_server` → state-file mutation.
+  State file unchanged when haproxy refuses or is unreachable. Was: state-file-first
+  ordering produced split-brain on partial failure.
+- **A7 — `lb auto-add` force-ready:** explicit `set_state ready` after every `add_server`
+  during recovery. Was: backends stuck in maint after LB restart, served no traffic.
+- **A8 — `lb remove` not-found semantics:** scripting-friendly — returns 1 when
+  nothing was removed; tries haproxy-side cleanup against all pools when state-file
+  has no entry.
+
+### Fixed (v0.2.1 hardening — Commit B: LB manager hygiene)
+- **B1 — `lb start` double-start guard:** refuses when haproxy already running; `--force`
+  triggers stop-then-start.
+- **B2 — admin socket recv:** `socket.settimeout(5.0)` + recv-until-`\n\n` terminator.
+  Was: `<4096` short-read terminator could truncate `show servers state` parsing.
+- **B3+B4 — `lb stop` reliability:** poll for SIGTERM exit, SIGKILL fallback after 10s,
+  unlink admin socket file. Was: pidfile unlinked immediately even when haproxy still
+  draining; admin socket leaked across restarts.
+- **B5 — pidfile staleness:** verify `/proc/<pid>/comm` matches "haproxy" before
+  trusting the pid. Was: PID-recycle after reboot reported false `running`.
+- **B6+B7 — admin socket response parsing:** `add_server` checks for "New server
+  registered." token; `remove_server` raises on "Operation not permitted" / unknown
+  errors. Was: any output was reported as success.
+- **B8 — `show servers state` parsing:** prefer IP/port from server name `b_<ip>_<port>`
+  over `srv_addr` column when name parses cleanly. Was: rows with `srv_addr=0.0.0.0`
+  produced bogus endpoints.
+- **B9+B10 — `lb health`:** probes each backend's actual host (not localhost); exit
+  code 1 not unhealthy-count (could overflow >255).
+- **B11 — `lb reload`:** `haproxy -c -f` precheck; captures stdout/stderr on failure.
+  Was: traceback only.
+- **B12 — legacy state-file migration:** flock-protected, atomic, runs once via
+  `LbManager.__init__` bootstrap. Was: race across concurrent processes.
+
+### Fixed (v0.2.1 hardening — Commit C: config + UX)
+- **C1 — schema strictness:** `ClusterFile`/`ProfileFile` switched to `extra="forbid"`.
+  Top-level typos like `Profile:` (capital) now hard-fail. Was: silently swallowed.
+- **C2+C3 — `profiles set`:** rejects block-scalar `profile: |` and duplicate
+  top-level `profile:` lines (exit 3). Atomic write via `tempfile + os.replace`,
+  explicit UTF-8.
+- **C4 — `config migrate` safety:** `--write` opt-in (default = diff to stdout);
+  validates round-trip through `ClusterFile.model_validate` before clobbering;
+  `.bak` written first; `--force` to overwrite existing `.bak`.
+- **C5 — `vctl config -h`:** per-verb help + parent description (regression of
+  earlier `lb` subcommand fix).
+- **C6 — `serve`/`stop`/`preflight` subparsers:** `description=` populated;
+  `--skip-preflight` actually wired (was a no-op flag).
+- **C7 — root flags:** `help=` text on `--profile`, `--log-level`, `--log-format`.
+- **C8 — exit code drift:** aligned with documented mapping (0 ok, 1 generic, 2
+  config, 3 user, 4 environment).
+- **C9 — `FileNotFoundError` catch:** narrowed — only cluster.yaml missing returns 2;
+  other FileNotFoundErrors re-raise.
+- **C10 — `lb where` multi-pool:** per-pool output for >1 pools; `--pool <name>` filter.
+- **C11 — `init-config` partial-clobber guard:** pre-flight existence sweep; never
+  writes a partial scaffold.
+- **C12 — templates:** site-specific paths (`/mnt/...`) replaced with `<EDIT_ME>`
+  sentinels.
+
+### Fixed (v0.2.1 hardening — Commit D: env / coerce / resolver)
+- **D1 — env override scalar→dict guard:** `VCTL_LB__HOST__FOO=1` now raises ValueError
+  instead of silently overwriting `lb.host` with a dict.
+- **D2 — env override empty key segments:** `VCTL_LB__=8080` and `VCTL___HOST=x` now
+  raise ValueError.
+- **D3 — `_coerce_scalar` strict regex:** rejects `nan`, `inf`, `1e3`, `0x10`. Only
+  `^-?\d+$` parses as int; only `^-?\d+\.\d+$` parses as float.
+- **D4 — `_deep_merge` None as delete:** profiles can unset cluster-level env vars
+  by setting them to null. Was: literal `"None"` string exported as env value.
+- **D5 — `detect_self_ip` fallback chain:** UDP probe → `gethostbyname(gethostname())`
+  → `127.0.0.1`. Air-gapped hosts no longer crash on every CLI invocation.
+- **D6 — pydantic Field constraints:** all `bind_port` ge=1 le=65535; `num_gpus` ge=0;
+  parallelism fields ge=1; health `fall`/`rise` ge=1; health `path` must start with `/`.
+- **D7 — `~` expansion:** `cluster.venv` and `cluster.state_dir` now expanduser;
+  `min_length=1`.
+- **D8 — `--profile` path-traversal:** rejects names containing `/`, `\`, `..`, or
+  starting with `.`.
+- **D9 — `host`/`served_model`:** `min_length=1` (rejects empty strings).
+- **D10 — `_kill_tree` race:** tolerates `psutil.NoSuchProcess` at every step.
+- **D11 — `serve` Popen:** `start_new_session=True` so SIGINT to vctl doesn't
+  double-deliver to vllm via the same process group.
+- **D12 — env value serialization:** booleans lowercased (`True` → `"true"`) for
+  POSIX env compatibility.
+- **D13 — yaml duplicate keys:** custom `_StrictLoader` raises `ConstructorError` on
+  duplicate mapping keys. Was: silent last-wins.
 
 ### Security (v0.2.1 hardening — Commit E)
 - **E1 — HAProxy admin socket bind address (`lb.admin.bind_addr`):** New optional field on

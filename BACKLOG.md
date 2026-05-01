@@ -1,7 +1,7 @@
 # Backlog
 
 ## In progress
-- v0.2.1 hardening sweep (post-review code-review findings, see below)
+- (v0.2.1 shipped — see commits cb0ebcd / c7b8813 / 6e49a05 / bb0f47b / 719e288)
 
 ## Code review findings (2026-05-01) — v0.2.1 hardening
 
