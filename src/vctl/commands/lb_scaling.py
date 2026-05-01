@@ -64,6 +64,10 @@ def _do_add(ep: str, mgr: LbManager, bs: BackendState) -> int:
             cli.add_server("pool", _name_for(ep), ep)
         except Exception as e:
             _LOG.error("admin socket add_server failed: %s", e)
+        # Force ready: clears any lingering drain/maint from a previous
+        # session that crashed mid-detach. Idempotent.
+        with contextlib.suppress(Exception):
+            cli.set_state("pool", _name_for(ep), "ready")
     label = "(new)" if state_result == "new" else "(already present)"
     print(f"add {ep} {label}", file=sys.stderr)
     return 0
