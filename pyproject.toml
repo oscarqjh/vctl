@@ -42,7 +42,9 @@ dev = [
 vctl = "vctl.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/example-org/vctl"
+Homepage = "https://github.com/oscarqjh/vctl"
+Repository = "https://github.com/oscarqjh/vctl.git"
+Issues = "https://github.com/oscarqjh/vctl/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vctl"]

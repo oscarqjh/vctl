@@ -7,16 +7,18 @@
 ## Install
 
 ```bash
-uv tool install git+https://github.com/<gh-org>/vctl
+uv tool install git+https://github.com/oscarqjh/vctl.git
 ```
 
-> `<gh-org>` is a placeholder filled at the first public release. Pin to a tag:
-> `uv tool install git+https://github.com/<gh-org>/vctl@v0.1.0`
+Pin to a release tag (recommended):
+```bash
+uv tool install git+https://github.com/oscarqjh/vctl.git@v0.1.0
+```
 
 To include the optional migration helper (converts the old bash-prototype YAML to `vctl/v1`):
 
 ```bash
-uv tool install "git+https://github.com/<gh-org>/vctl[migrate]"
+uv tool install "git+https://github.com/oscarqjh/vctl.git[migrate]"
 ```
 
 Verify the install:

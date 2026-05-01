@@ -49,7 +49,7 @@ The `release.yml` GitHub Actions workflow triggers on `v*` tags and builds the d
 After the workflow completes:
 
 ```bash
-uv tool install --reinstall "git+https://github.com/<gh-org>/vctl@v0.1.0"
+uv tool install --reinstall "git+https://github.com/oscarqjh/vctl.git@v0.1.0"
 vctl --help
 vctl --version   # must print 0.1.0
 ```
