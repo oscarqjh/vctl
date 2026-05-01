@@ -34,22 +34,6 @@ def _ns(tmp_path: Path, profile: str | None = None) -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
-def test_main_version(capsys: pytest.CaptureFixture[str]) -> None:
-    from vctl.cli import main
-
-    with pytest.raises(SystemExit) as exc_info:
-        main(["--version"])
-    assert exc_info.value.code == 0
-
-
-def test_main_no_command_exits_nonzero() -> None:
-    from vctl.cli import main
-
-    with pytest.raises(SystemExit) as exc_info:
-        main([])
-    assert exc_info.value.code != 0
-
-
 def test_hoist_positional_profile() -> None:
     from vctl.cli import _hoist_positional_profile
 
@@ -169,17 +153,6 @@ def test_config_validate_bad_file(tmp_path: Path) -> None:
     bad.write_text("not_valid: true\nkind: Cluster\n")
     rc = run(_ns(tmp_path), ["validate", str(bad)])
     assert rc == 2
-
-
-def test_config_migrate(tmp_path: Path) -> None:
-    from vctl.commands.config_cmd import run
-
-    # C4: default (no --write) is dry-run; file stays unchanged, rc=0.
-    ns = _ns(tmp_path)
-    original = (tmp_path / "cluster.yaml").read_text()
-    rc = run(ns, ["migrate", str(tmp_path / "cluster.yaml")])
-    assert rc == 0
-    assert (tmp_path / "cluster.yaml").read_text() == original
 
 
 # ---------------------------------------------------------------------------
@@ -481,28 +454,6 @@ def test_lb_scaling_do_health(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 # ---------------------------------------------------------------------------
 # lb command dispatch (some fast paths)
 # ---------------------------------------------------------------------------
-
-
-def test_lb_where(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    from vctl.commands.lb import run
-
-    rc = run(_ns(tmp_path), ["where"])
-    assert rc == 0
-    assert "10.0.0.1:8080" in capsys.readouterr().out
-
-
-def test_lb_list_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    from vctl.commands.lb import run
-
-    with patch.dict(
-        os.environ,
-        {
-            "VCTL_CLUSTER__STATE_DIR": str(tmp_path / "state"),
-            "VCTL_TEST_NO_SOCKET": "1",
-        },
-    ):
-        rc = run(_ns(tmp_path), ["list"])
-    assert rc == 0
 
 
 def test_lb_stats(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

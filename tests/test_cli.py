@@ -6,6 +6,9 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
+
+import pytest
 
 
 def _vctl(
@@ -105,3 +108,46 @@ def test_config_env_var_overrides_default(tmp_path, monkeypatch) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert "1.2.3.4" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# C5/C6/C7 — help-text presence (moved from test_commit_c.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_substrings"),
+    [
+        pytest.param(
+            ["config", "-h"],
+            ["validate", "show", "schema", "migrate"],
+            id="c5_config_help_contains_verbs",
+        ),
+        pytest.param(
+            ["serve", "-h"],
+            ["--skip-preflight"],
+            id="c6_serve_description_present",
+        ),
+        pytest.param(
+            ["stop", "-h"],
+            ["stop"],
+            id="c6_stop_description_present",
+        ),
+        pytest.param(
+            ["preflight", "-h"],
+            ["preflight"],
+            id="c6_preflight_description_present",
+        ),
+        pytest.param(
+            ["--help"],
+            ["--profile", "--log-level", "--log-format"],
+            id="c7_root_flags_have_help",
+        ),
+    ],
+)
+def test_help_text_presence(args: list[str], expected_substrings: Sequence[str]) -> None:
+    """C5/C6/C7: help output must contain expected substrings."""
+    proc = _vctl(*args)
+    out = proc.stdout + proc.stderr
+    for s in expected_substrings:
+        assert s in out, f"{s!r} missing from `vctl {' '.join(args)}` output"

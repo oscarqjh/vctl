@@ -76,53 +76,43 @@ def test_d2_triple_underscore_in_middle_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_d3_scientific_notation_stays_string() -> None:
-    assert _coerce_scalar("1e3") == "1e3"
-    assert isinstance(_coerce_scalar("1e3"), str)
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param("1e3", id="d3_scientific_notation_stays_string"),
+        pytest.param("nan", id="d3_nan_stays_string"),
+        pytest.param("inf", id="d3_inf_stays_string"),
+        pytest.param("0x10", id="d3_hex_stays_string"),
+    ],
+)
+def test_d3_strings_stay_string(raw: str) -> None:
+    """D3: ambiguous/non-decimal strings must remain as str."""
+    result = _coerce_scalar(raw)
+    assert result == raw
+    assert isinstance(result, str)
 
 
-def test_d3_nan_stays_string() -> None:
-    assert _coerce_scalar("nan") == "nan"
-    assert isinstance(_coerce_scalar("nan"), str)
+@pytest.mark.parametrize(
+    ("raw", "expected", "expected_type"),
+    [
+        pytest.param("123", 123, int, id="d3_plain_int_coerced"),
+        pytest.param("-5", -5, int, id="d3_negative_int_coerced"),
+        pytest.param("1.5", 1.5, float, id="d3_plain_float_coerced"),
+        pytest.param("-3.14", -3.14, float, id="d3_negative_float_coerced"),
+        pytest.param("true", True, bool, id="d3_bool_true_coerced"),
+        pytest.param("false", False, bool, id="d3_bool_false_coerced"),
+    ],
+)
+def test_d3_coercion_succeeds(raw: str, expected: Any, expected_type: type) -> None:
+    """D3: plain int/float/bool strings must be coerced to the right Python type."""
+    result = _coerce_scalar(raw)
+    assert result == expected
+    assert isinstance(result, expected_type)
 
 
-def test_d3_inf_stays_string() -> None:
-    assert _coerce_scalar("inf") == "inf"
-    assert isinstance(_coerce_scalar("inf"), str)
-
-
-def test_d3_hex_stays_string() -> None:
-    assert _coerce_scalar("0x10") == "0x10"
-    assert isinstance(_coerce_scalar("0x10"), str)
-
-
-def test_d3_plain_int_coerced() -> None:
-    assert _coerce_scalar("123") == 123
-    assert isinstance(_coerce_scalar("123"), int)
-
-
-def test_d3_negative_int_coerced() -> None:
-    assert _coerce_scalar("-5") == -5
-    assert isinstance(_coerce_scalar("-5"), int)
-
-
-def test_d3_plain_float_coerced() -> None:
-    assert _coerce_scalar("1.5") == 1.5
-    assert isinstance(_coerce_scalar("1.5"), float)
-
-
-def test_d3_negative_float_coerced() -> None:
-    assert _coerce_scalar("-3.14") == -3.14
-    assert isinstance(_coerce_scalar("-3.14"), float)
-
-
-def test_d3_bool_true_coerced() -> None:
-    assert _coerce_scalar("true") is True
+def test_d3_bool_true_uppercase_coerced() -> None:
+    """D3: 'True' (capital T) must also coerce to True."""
     assert _coerce_scalar("True") is True
-
-
-def test_d3_bool_false_coerced() -> None:
-    assert _coerce_scalar("false") is False
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +152,9 @@ def test_d4_normal_merge_still_works() -> None:
 
 
 def test_d5_fallback_to_gethostbyname_on_connect_error() -> None:
-    """OSError on UDP connect → fall back to gethostbyname."""
+    """D5: OSError on UDP connect → fall back to gethostbyname (or loopback); must return a
+    non-empty string and must never raise regardless of network state (merges
+    test_d5_fallback_never_raises)."""
     from vctl.platform import detect_self_ip
 
     with patch("socket.socket") as mock_sock_cls:
@@ -174,12 +166,13 @@ def test_d5_fallback_to_gethostbyname_on_connect_error() -> None:
 
         result = detect_self_ip()
 
+    # UDP failed but gethostbyname may succeed → non-empty string, no raise.
     assert isinstance(result, str)
     assert len(result) > 0
 
 
 def test_d5_fallback_to_loopback_when_all_fail() -> None:
-    """Both UDP probe and gethostbyname fail → must return 127.0.0.1."""
+    """D5: Both UDP probe and gethostbyname fail → must return 127.0.0.1."""
     from vctl.platform import detect_self_ip
 
     with (
@@ -197,46 +190,26 @@ def test_d5_fallback_to_loopback_when_all_fail() -> None:
     assert result == "127.0.0.1"
 
 
-def test_d5_fallback_never_raises() -> None:
-    """detect_self_ip must never raise regardless of network state."""
-    from vctl.platform import detect_self_ip
-
-    with (
-        patch("socket.socket") as mock_sock_cls,
-        patch("socket.gethostbyname", side_effect=OSError("fail")),
-    ):
-        mock_sock = MagicMock()
-        mock_sock_cls.return_value = mock_sock
-        mock_sock.__enter__ = lambda s: s
-        mock_sock.__exit__ = MagicMock(return_value=False)
-        mock_sock.connect.side_effect = OSError("fail")
-
-        result = detect_self_ip()
-
-    assert result == "127.0.0.1"
-
-
 # ---------------------------------------------------------------------------
 # D6 — pydantic Field range constraints
 # ---------------------------------------------------------------------------
 
 
-def test_d6_bind_port_zero_rejected() -> None:
+@pytest.mark.parametrize(
+    "bind_port",
+    [
+        pytest.param(0, id="d6_bind_port_zero_rejected"),
+        pytest.param(70000, id="d6_bind_port_too_large_rejected"),
+    ],
+)
+def test_d6_bind_port_out_of_range_rejected(bind_port: int) -> None:
+    """D6: bind_port values outside 1-65535 must raise ValidationError."""
     from pydantic import ValidationError
 
     from vctl.config.models import Pool
 
     with pytest.raises(ValidationError):
-        Pool(name="x", served_model="y", bind_port=0)
-
-
-def test_d6_bind_port_too_large_rejected() -> None:
-    from pydantic import ValidationError
-
-    from vctl.config.models import Pool
-
-    with pytest.raises(ValidationError):
-        Pool(name="x", served_model="y", bind_port=70000)
+        Pool(name="x", served_model="y", bind_port=bind_port)
 
 
 def test_d6_bind_port_valid_boundaries() -> None:
@@ -247,6 +220,7 @@ def test_d6_bind_port_valid_boundaries() -> None:
 
 
 def test_d6_num_gpus_negative_rejected() -> None:
+    """D6: num_gpus=-1 must raise ValidationError (own test — only one)."""
     from pydantic import ValidationError
 
     from vctl.config.models import Resources
@@ -262,58 +236,50 @@ def test_d6_num_gpus_zero_allowed() -> None:
     assert r.num_gpus == 0
 
 
-def test_d6_data_parallel_zero_rejected() -> None:
+@pytest.mark.parametrize(
+    ("data_parallel", "tensor_parallel", "api_server_count"),
+    [
+        pytest.param(0, 1, 1, id="d6_data_parallel_zero_rejected"),
+        pytest.param(1, 0, 1, id="d6_tensor_parallel_zero_rejected"),
+        pytest.param(1, 1, 0, id="d6_api_server_count_zero_rejected"),
+    ],
+)
+def test_d6_parallelism_zero_rejected(
+    data_parallel: int, tensor_parallel: int, api_server_count: int
+) -> None:
+    """D6: any Parallelism field set to zero must raise ValidationError."""
     from pydantic import ValidationError
 
     from vctl.config.models import Parallelism
 
     with pytest.raises(ValidationError):
-        Parallelism(data_parallel=0, tensor_parallel=1, api_server_count=1)
+        Parallelism(
+            data_parallel=data_parallel,
+            tensor_parallel=tensor_parallel,
+            api_server_count=api_server_count,
+        )
 
 
-def test_d6_tensor_parallel_zero_rejected() -> None:
-    from pydantic import ValidationError
-
-    from vctl.config.models import Parallelism
-
-    with pytest.raises(ValidationError):
-        Parallelism(data_parallel=1, tensor_parallel=0, api_server_count=1)
-
-
-def test_d6_api_server_count_zero_rejected() -> None:
-    from pydantic import ValidationError
-
-    from vctl.config.models import Parallelism
-
-    with pytest.raises(ValidationError):
-        Parallelism(data_parallel=1, tensor_parallel=1, api_server_count=0)
-
-
-def test_d6_lb_health_fall_zero_rejected() -> None:
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        pytest.param({"fall": 0}, None, id="d6_lb_health_fall_zero_rejected"),
+        pytest.param({"rise": 0}, None, id="d6_lb_health_rise_zero_rejected"),
+        pytest.param({"path": "health"}, "'/'", id="d6_health_path_must_start_with_slash"),
+    ],
+)
+def test_d6_lb_health_field_rejected(kwargs: dict, match: str | None) -> None:
+    """D6: LbHealth field constraints — fall/rise ≥ 1, path starts with '/'."""
     from pydantic import ValidationError
 
     from vctl.config.models import LbHealth
 
-    with pytest.raises(ValidationError):
-        LbHealth(fall=0)
-
-
-def test_d6_lb_health_rise_zero_rejected() -> None:
-    from pydantic import ValidationError
-
-    from vctl.config.models import LbHealth
-
-    with pytest.raises(ValidationError):
-        LbHealth(rise=0)
-
-
-def test_d6_health_path_must_start_with_slash() -> None:
-    from pydantic import ValidationError
-
-    from vctl.config.models import LbHealth
-
-    with pytest.raises(ValidationError, match="'/'"):
-        LbHealth(path="health")
+    if match:
+        with pytest.raises(ValidationError, match=match):
+            LbHealth(**kwargs)
+    else:
+        with pytest.raises(ValidationError):
+            LbHealth(**kwargs)
 
 
 def test_d6_health_path_with_slash_ok() -> None:
@@ -375,36 +341,32 @@ def test_d7_empty_state_dir_rejected() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_d8_path_traversal_rejected() -> None:
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("../etc/passwd", id="d8_path_traversal_rejected"),
+        pytest.param("foo/bar", id="d8_slash_rejected"),
+        pytest.param(".hidden", id="d8_leading_dot_rejected"),
+        pytest.param("..foo", id="d8_leading_double_dot_rejected"),
+    ],
+)
+def test_d8_invalid_profile_names_rejected(name: str) -> None:
+    """D8: path-traversal and leading-dot names must raise ValueError."""
     with pytest.raises(ValueError, match="invalid profile name"):
-        _validate_profile_name("../etc/passwd")
+        _validate_profile_name(name)
 
 
-def test_d8_slash_rejected() -> None:
-    with pytest.raises(ValueError, match="invalid profile name"):
-        _validate_profile_name("foo/bar")
-
-
-def test_d8_leading_dot_rejected() -> None:
-    with pytest.raises(ValueError, match="invalid profile name"):
-        _validate_profile_name(".hidden")
-
-
-def test_d8_leading_double_dot_rejected() -> None:
-    with pytest.raises(ValueError, match="invalid profile name"):
-        _validate_profile_name("..foo")
-
-
-def test_d8_valid_name_with_dot_in_middle() -> None:
-    _validate_profile_name("qwen3.5-9b")  # should not raise
-
-
-def test_d8_valid_alphanumeric() -> None:
-    _validate_profile_name("my-profile_v2")  # should not raise
-
-
-def test_d8_valid_starts_with_digit() -> None:
-    _validate_profile_name("9b-model")  # should not raise
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("qwen3.5-9b", id="d8_valid_name_with_dot_in_middle"),
+        pytest.param("my-profile_v2", id="d8_valid_alphanumeric"),
+        pytest.param("9b-model", id="d8_valid_starts_with_digit"),
+    ],
+)
+def test_d8_valid_profile_names_accepted(name: str) -> None:
+    """D8: safe profile names must not raise."""
+    _validate_profile_name(name)  # should not raise
 
 
 # ---------------------------------------------------------------------------

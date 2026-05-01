@@ -207,43 +207,8 @@ def test_c4_migrate_write_force_overwrites_bak(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# C5 — vctl config -h: per-verb help
-# ---------------------------------------------------------------------------
-
-
-def test_c5_config_help_contains_verbs() -> None:
-    """C5: `vctl config -h` output contains all four verbs with descriptions."""
-    proc = _vctl("config", "-h")
-    out = proc.stdout + proc.stderr
-    for verb in ("validate", "show", "schema", "migrate"):
-        assert verb in out, f"verb {verb!r} missing from `vctl config -h` output"
-
-
-# ---------------------------------------------------------------------------
 # C6 — serve/stop/preflight descriptions; --skip-preflight wired
 # ---------------------------------------------------------------------------
-
-
-def test_c6_serve_description_present() -> None:
-    """C6: `vctl serve -h` contains a description."""
-    proc = _vctl("serve", "-h")
-    out = proc.stdout + proc.stderr
-    assert "vllm" in out.lower() or "serve" in out.lower()
-    assert "--skip-preflight" in out
-
-
-def test_c6_stop_description_present() -> None:
-    """C6: `vctl stop -h` contains a description."""
-    proc = _vctl("stop", "-h")
-    out = proc.stdout + proc.stderr
-    assert "drain" in out.lower() or "stop" in out.lower()
-
-
-def test_c6_preflight_description_present() -> None:
-    """C6: `vctl preflight -h` contains a description."""
-    proc = _vctl("preflight", "-h")
-    out = proc.stdout + proc.stderr
-    assert "sanity" in out.lower() or "checks" in out.lower() or "preflight" in out.lower()
 
 
 def test_c6_skip_preflight_flag_is_wired(tmp_path: Path) -> None:
@@ -286,22 +251,6 @@ def test_c6_skip_preflight_flag_is_wired(tmp_path: Path) -> None:
     assert call_count["n"] == 0, (
         "--skip-preflight was set but preflight.run was still called"
     )
-
-
-# ---------------------------------------------------------------------------
-# C7 — root flag help text
-# ---------------------------------------------------------------------------
-
-
-def test_c7_root_flags_have_help() -> None:
-    """C7: --profile, --log-level, --log-format all have help text in `vctl --help`."""
-    proc = _vctl("--help")
-    out = proc.stdout + proc.stderr
-    assert "--profile" in out
-    assert "--log-level" in out
-    assert "--log-format" in out
-    # Verify meaningful help text, not just the flag name.
-    assert "profile" in out.lower()
 
 
 # ---------------------------------------------------------------------------
