@@ -3,6 +3,40 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.2] - 2026-05-02
+
+Hotfix release. v0.2.1 surfaced two real-world issues during smoke testing
+on the LB host: `lb status`/`stop` couldn't track foreground haproxy because
+the renderer never emits the `daemon` directive (so the `-p pidfile` flag is
+silently ignored), and integration tests leaked ~80 real haproxy processes
+per CI run because they collided on a hard-coded tmux session name and
+lacked teardown.
+
+### Fixed
+- **F1 — pidfile fallback for foreground haproxy:** `LbManager.status()`,
+  `stop()`, and `reload()` now consult `_find_haproxy_pid_by_cfg(cfg_path)`
+  (psutil scan for `haproxy -f <our cfg>`) when the pidfile is missing or
+  empty. `lb status` now correctly reports the live PID even though haproxy
+  is running in tmux without daemonization.
+- **F2 — tmux session name parameter:** `LbManager(..., tmux_name=...)`.
+  Defaults to `"vctl-lb"` (production) but tests pass unique names so they
+  don't collide with a running real LB on dev machines or with parallel
+  test workers.
+- **F3 — integration test teardown:** the two real-haproxy integration tests
+  now wrap their bodies in `try/finally` with a `_force_cleanup_haproxy_for_cfg`
+  helper that SIGKILLs any haproxy whose cmdline matches the test's specific
+  `cfg_path`. A session-scoped autouse fixture sweeps any `/tmp/pytest-of-*`
+  haproxy at session end. Production paths are never matched.
+- **F4 — `lb status` UX for remote LB:** when running on a worker pod
+  (`detect_self_ip() != lb.host`), `lb status` now prints a compact
+  `remote LB at <host>:<port> — admin_reachable=…` line instead of the full
+  pidfile/tmux table (which is local-only and meaningless from a worker).
+- **F6 — `lb list` live-vs-tracked annotation:** each entry is now marked
+  `✓ live` (in state file AND haproxy admin), `⚠ tracked-only` (state file
+  only — `vctl lb auto-add` will reconcile), or `⚠ untracked` (haproxy only —
+  `vctl lb add <ep>` adopts it). Cross-references `show servers state` from
+  the admin socket. Degrades gracefully when admin socket is unreachable.
+
 ## [0.2.1] - 2026-05-02
 
 Hardening sweep — 48 fixes from a multi-axis code review (correctness, UX, security).
