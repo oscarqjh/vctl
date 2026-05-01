@@ -26,7 +26,7 @@ def test_migrate_cluster_old_to_new() -> None:
     assert new["cluster"]["state_dir"] == "/mnt/aigc/users/qianjianheng/.vllm-lb-state"
     assert new["lb"]["kind"] == "haproxy"
     assert new["lb"]["host"] == "10.119.30.181"
-    assert new["lb"]["client"]["bind_port"] == 8080
+    assert new["lb"]["pools"][0]["bind_port"] == 8080
     assert new["lb"]["admin"]["bind_port"] == 9001
     assert new["lb"]["stats"]["bind_port"] == 9000
     assert new["lb"]["health"]["path"] == "/health"
@@ -54,6 +54,30 @@ def test_already_migrated_cluster_is_noop() -> None:
     out = migrate_cluster(src)
     assert out["apiVersion"] == "vctl/v1"
     assert out == src or out["lb"]["host"] == src["lb"]["host"]
+
+
+def test_migrate_cluster_emits_pools_entry() -> None:
+    """Legacy bind_port → lb.pools[0]."""
+    new = migrate_cluster(
+        {
+            "profile": "x",
+            "venv": "/v",
+            "env": {},
+            "lb": {
+                "host": "10.0.0.1",
+                "bind_port": 8080,  # legacy single-pool
+                "admin_port": 9001,
+                "stats_port": 9000,
+                "state_dir": "/s",
+            },
+        }
+    )
+    assert "client" not in new["lb"]
+    assert new["lb"]["pools"] == [{"name": "default", "served_model": "*", "bind_port": 8080}]
+    # Round-trip through pydantic to confirm validity.
+    from vctl.config.models import ClusterFile
+
+    ClusterFile.model_validate(new)
 
 
 def test_detect_kind_cluster_vs_profile() -> None:

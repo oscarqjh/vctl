@@ -31,7 +31,6 @@ def migrate_cluster(old: dict[str, Any]) -> NewDoc:
         "lb": {
             "kind": "haproxy",
             "host": lb_old.get("host", ""),
-            "client": {"bind_port": lb_old.get("bind_port", 8080)},
             "admin": {"bind_port": lb_old.get("admin_port", 9001)},
             "stats": {"bind_port": lb_old.get("stats_port", 9000)},
             "algorithm": lb_old.get("algorithm", "leastconn"),
@@ -48,6 +47,13 @@ def migrate_cluster(old: dict[str, Any]) -> NewDoc:
                 "timeout_client": lb_old.get("timeout_client", "1h"),
                 "timeout_server": lb_old.get("timeout_server", "1h"),
             },
+            "pools": [
+                {
+                    "name": "default",
+                    "served_model": "*",
+                    "bind_port": lb_old.get("bind_port", 8080),
+                }
+            ],
         },
     }
 
