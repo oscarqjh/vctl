@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ApiVersion = Literal["vctl/v1"]
 
@@ -46,15 +46,48 @@ class LbDefaults(_Strict):
     timeout_server: str = "1h"
 
 
+class Pool(_Strict):
+    name: str
+    served_model: str  # exact model id; "*" wildcard for synthesized default
+    bind_port: int
+
+
 class LbHaproxy(_Strict):
     kind: Literal["haproxy"] = "haproxy"
     host: str
-    client: LbClient
+    client: LbClient | None = None  # legacy single-pool field
     admin: LbAdmin
     stats: LbStats
     algorithm: str = "leastconn"
     health: LbHealth = Field(default_factory=LbHealth)
     defaults: LbDefaults = Field(default_factory=LbDefaults)
+    pools: list[Pool] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _synthesize_or_validate_pools(self) -> LbHaproxy:
+        if not self.pools:
+            if self.client is None:
+                raise ValueError("lb: must specify either `pools` or `client.bind_port`")
+            object.__setattr__(
+                self,
+                "pools",
+                [Pool(name="default", served_model="*", bind_port=self.client.bind_port)],
+            )
+        names = [p.name for p in self.pools]
+        if len(names) != len(set(names)):
+            raise ValueError(f"lb.pools: duplicate name in {names}")
+        ports = [p.bind_port for p in self.pools]
+        if len(ports) != len(set(ports)):
+            raise ValueError(f"lb.pools: duplicate bind_port in {ports}")
+        non_wild = [p.served_model for p in self.pools if p.served_model != "*"]
+        if len(non_wild) != len(set(non_wild)):
+            raise ValueError(f"lb.pools: duplicate served_model in {non_wild}")
+        if self.admin.bind_port in ports or self.stats.bind_port in ports:
+            raise ValueError(
+                f"lb.pools: bind_port collides with admin/stats "
+                f"(admin={self.admin.bind_port}, stats={self.stats.bind_port}, pool_ports={ports})"
+            )
+        return self
 
 
 # Tagged union — adding new LB kinds becomes a new class + a new tag.

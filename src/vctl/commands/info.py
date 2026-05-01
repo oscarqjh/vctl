@@ -20,7 +20,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         ("api_servers", str(rc.parallelism.api_server_count)),
         ("vllm_port", str(rc.server.http_port)),
         ("lb.host", rc.lb.host),
-        ("lb.client", str(rc.lb.client.bind_port)),
+        ("lb.client", str(rc.lb.pools[0].bind_port)),
         ("lb.admin", str(rc.lb.admin.bind_port)),
         ("lb.stats", str(rc.lb.stats.bind_port)),
         ("venv", rc.cluster.venv),

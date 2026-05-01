@@ -54,7 +54,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         ("gpus", *_check_gpus(rc.resources.num_gpus)),
         ("shm", *_check_shm()),
         ("venv", *_check_venv(rc.cluster.venv)),
-        ("lb_route", *_check_lb_route(rc.lb.host, rc.lb.client.bind_port)),
+        ("lb_route", *_check_lb_route(rc.lb.host, rc.lb.pools[0].bind_port)),
     ]
     payload = {"checks": [{"name": n, "ok": ok, "msg": m} for (n, ok, m) in checks]}
     if parsed.json:

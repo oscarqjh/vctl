@@ -43,7 +43,7 @@ def render_haproxy_cfg(lb: LbHaproxy, paths: RuntimePaths, backends: list[str]) 
         f"    timeout client {lb.defaults.timeout_client}",
         f"    timeout server {lb.defaults.timeout_server}",
         "frontend http-in",
-        f"    bind *:{lb.client.bind_port}",
+        f"    bind *:{lb.pools[0].bind_port}",
         "    default_backend pool",
         "backend pool",
         f"    {balance}",

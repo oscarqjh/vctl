@@ -64,7 +64,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     verb = parsed.verb
     mgr, bs, _ = _manager(ns)
     if verb == "where":
-        print(f"{mgr.lb.host}:{mgr.lb.client.bind_port}")
+        print(f"{mgr.lb.host}:{mgr.lb.pools[0].bind_port}")
         return 0
     if verb == "is-host":
         return 0 if mgr.is_host() else 1
@@ -151,7 +151,7 @@ def _wait_ready(mgr: LbManager, n: int) -> int:
         except OSError:
             return []
 
-    front_url = f"http://{mgr.lb.host}:{mgr.lb.client.bind_port}/v1/models"
+    front_url = f"http://{mgr.lb.host}:{mgr.lb.pools[0].bind_port}/v1/models"
     last_log = 0.0
     while True:
         # Short socket connect timeout — capped by remaining deadline.
