@@ -83,7 +83,8 @@ def test_serve_attach_then_sigint_exits_130(tmp_path: Path) -> None:
     cmd = [sys.executable, "-m", "vctl", "--log-format", "json", "serve", "--skip-preflight"]
     proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # Poll for attach — process startup + readiness check can take >3s on slow CI.
-    state_file = state_dir / "10.0.0.1_backends.txt"
+    # New layout: <state_dir>/<lb_host>/<pool>_backends.txt
+    state_file = state_dir / "10.0.0.1" / "default_backends.txt"
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if state_file.exists() and state_file.read_text().strip():
@@ -134,7 +135,8 @@ def test_serve_sigint_during_load_exits_130_no_orphans(tmp_path: Path) -> None:
     assert rc == 130, f"expected exit 130, got {rc}"
 
     # State file must NOT exist (process was never attached).
-    state_file = state_dir / "10.0.0.1_backends.txt"
+    # New layout: <state_dir>/<lb_host>/<pool>_backends.txt
+    state_file = state_dir / "10.0.0.1" / "default_backends.txt"
     if state_file.exists():
         assert not state_file.read_text().strip(), "state file should be empty (never attached)"
 

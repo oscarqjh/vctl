@@ -1,4 +1,4 @@
-"""Atomic, fcntl.flock-protected backend list."""
+"""Atomic, fcntl.flock-protected per-pool backend list."""
 
 from __future__ import annotations
 
@@ -13,34 +13,54 @@ from typing import Literal
 
 
 class BackendState:
-    def __init__(self, state_dir: Path, lb_host: str) -> None:
+    def __init__(self, state_dir: Path, lb_host: str, pool: str = "default") -> None:
         self.state_dir = Path(state_dir)
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.path = self.state_dir / f"{lb_host}_backends.txt"
-        self._lock_path = self.state_dir / f"{lb_host}_backends.lock"
+        self.lb_host = lb_host
+        self.pool = pool
+        # New layout: <state_dir>/<lb_host>/<pool>_backends.txt
+        self.host_dir = self.state_dir / lb_host
+        self.host_dir.mkdir(parents=True, exist_ok=True)
+        self.path = self.host_dir / f"{pool}_backends.txt"
+        self.lock_path = self.host_dir / f"{pool}_backends.lock"
+        self._maybe_migrate_legacy()
+
+    def _maybe_migrate_legacy(self) -> None:
+        """v0.1.0 layout: <state_dir>/<lb_host>_backends.txt (flat).
+        Move it under <lb_host>/default_backends.txt on first access.
+        """
+        if self.pool != "default":
+            return
+        legacy = self.state_dir / f"{self.lb_host}_backends.txt"
+        if legacy.exists() and not self.path.exists():
+            self.path.write_text(legacy.read_text())
+            with contextlib.suppress(OSError):
+                legacy.unlink()
+            # Also clean up the legacy lock if present
+            legacy_lock = self.state_dir / f"{self.lb_host}_backends.lock"
+            with contextlib.suppress(OSError):
+                legacy_lock.unlink()
 
     @contextlib.contextmanager
     def _locked(self) -> Generator[None, None, None]:
-        """Hold an exclusive flock on a stable lock file for the duration."""
-        with open(self._lock_path, "a", encoding="utf-8") as lf:
-            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        """Hold an exclusive flock on the pool's lock file for the duration."""
+        self.lock_path.touch(exist_ok=True)
+        with open(self.lock_path, "r+", encoding="utf-8") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
                 yield
             finally:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
-    def _read_path(self) -> list[str]:
+    def _read_data(self) -> builtins.list[str]:
         if not self.path.exists():
             return []
         return [
-            line.strip()
-            for line in self.path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            ln.strip() for ln in self.path.read_text(encoding="utf-8").splitlines() if ln.strip()
         ]
 
-    def _atomic_write(self, entries: list[str]) -> None:
+    def _atomic_write(self, entries: builtins.list[str]) -> None:
         with tempfile.NamedTemporaryFile(
-            mode="w", dir=self.state_dir, delete=False, encoding="utf-8"
+            mode="w", dir=self.host_dir, delete=False, encoding="utf-8"
         ) as tmp:
             tmp_name = tmp.name
             try:
@@ -55,7 +75,7 @@ class BackendState:
 
     def add(self, ep: str) -> Literal["new", "already_present"]:
         with self._locked():
-            entries = self._read_path()
+            entries = self._read_data()
             if ep in entries:
                 return "already_present"
             entries.append(ep)
@@ -64,7 +84,7 @@ class BackendState:
 
     def remove(self, ep: str) -> bool:
         with self._locked():
-            entries = self._read_path()
+            entries = self._read_data()
             if ep not in entries:
                 return False
             entries.remove(ep)
@@ -73,7 +93,18 @@ class BackendState:
 
     def list(self) -> builtins.list[str]:
         with self._locked():
-            return self._read_path()
+            return self._read_data()
 
     def read(self) -> builtins.list[str]:
         return self.list()
+
+    @classmethod
+    def list_pools(cls, state_dir: Path, lb_host: str) -> builtins.list[str]:
+        """Return all pool names that currently have a state file."""
+        host_dir = Path(state_dir) / lb_host
+        if not host_dir.is_dir():
+            return []
+        out: builtins.list[str] = []
+        for f in host_dir.glob("*_backends.txt"):
+            out.append(f.stem.removesuffix("_backends"))
+        return sorted(out)
