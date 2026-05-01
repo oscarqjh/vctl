@@ -73,6 +73,11 @@ def _do_remove(ep: str, mgr: LbManager, bs: BackendState) -> int:
     bs.remove(ep)
     cli = _client(mgr)
     if cli is not None:
+        # HAProxy refuses `del server` unless the server is in maint state.
+        # Set maint first (idempotent), then del. Both errors swallowed —
+        # state file is always updated.
+        with contextlib.suppress(Exception):
+            cli.set_state("pool", _name_for(ep), "maint")
         with contextlib.suppress(Exception):
             cli.remove_server("pool", _name_for(ep))
     return 0
