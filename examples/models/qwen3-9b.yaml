@@ -1,0 +1,42 @@
+# vctl profile: Qwen3-9B (dense, text-only)
+# Schema version: vctl/v1
+# Apply: `vctl --profile qwen3-9b serve`  (or set as cluster.profile)
+
+apiVersion: vctl/v1
+kind: Profile
+
+model:
+  # HuggingFace repo or local path.
+  name: Qwen/Qwen3-9B
+  # OpenAI-compatible model_id exposed by `/v1/models`.
+  served_as: qwen3-9b
+
+resources:
+  # Total GPUs to claim on the host.
+  num_gpus: 8
+  # Subset of GPUs visible to vllm (matches num_gpus).
+  cuda_visible_devices: "0,1,2,3,4,5,6,7"
+
+parallelism:
+  # Number of independent vllm engines (replicates model weights).
+  data_parallel: 8
+  # Tensor-parallel slices within each engine. data_parallel * tensor_parallel
+  # must equal num_gpus.
+  tensor_parallel: 1
+  # Number of API-server workers. Default: data_parallel.
+  api_server_count: 8
+
+server:
+  # Listening port for vllm OpenAI-compatible API.
+  http_port: 8000
+
+# Pass-through args appended to `vllm serve <model>`. Use kebab-case to
+# match vllm CLI flag names. Booleans are rendered as `--flag=true|false`.
+vllm_args:
+  reasoning-parser: qwen3
+  enable-prefix-caching: true
+  async-scheduling: true
+
+# Subprocess env vars. Merges over cluster.env (profile wins on conflicts).
+env:
+  VLLM_ENGINE_READY_TIMEOUT_S: 1800

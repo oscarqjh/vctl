@@ -32,7 +32,38 @@ vctl --version
 
 ## Quickstart
 
-### 1. Write a cluster config
+### 0. Bootstrap your config (recommended)
+
+The fastest way to start is with `vctl init-config`, which scaffolds a fully-documented `cluster.yaml` and a default set of model profiles:
+
+```bash
+vctl init-config
+# Created:
+#   ./cluster.yaml
+#   ./models/qwen3-9b.yaml
+#   ./models/qwen3-vl-30b-a3b.yaml
+#   ./models/qwen3-vl-9b.yaml
+```
+
+Every field is documented inline. Edit `cluster.yaml` to set `lb.host`, `cluster.venv`, and `cluster.state_dir` for your environment, then pick a profile as your default.
+
+Options:
+
+| Flag | Description |
+|---|---|
+| `--dir <path>` | Write files into `<path>` instead of the current directory. |
+| `--force` | Overwrite existing files without prompting. |
+| `--profiles a,b,c` | Scaffold only the named profiles (default: all three). |
+
+Example — scaffold only one profile into a new directory:
+
+```bash
+vctl init-config --dir /opt/myconfig --profiles qwen3-9b
+```
+
+Available built-in profiles: `qwen3-9b`, `qwen3-vl-30b-a3b`, `qwen3-vl-9b`.
+
+### 1. Write a cluster config (manual alternative)
 
 ```bash
 cp examples/cluster.yaml cluster.yaml

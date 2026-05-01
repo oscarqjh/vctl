@@ -26,6 +26,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Se
 - HAProxy admin-state bitmask handling (MAINT 0x07, DRAIN 0x38) — drained backends NOT counted as ready in `wait-ready`.
 - `wait-ready` dual-check: ready_count + LB front HTTP 200 (AT-12).
 - Positional profile shortcut: `vctl serve models/qwen3-9b.yaml`.
+- `vctl init-config` — scaffolds a fully-documented `cluster.yaml` + `models/<name>.yaml` profiles in one step.
 
 ### Changed
 - Schema is now grouped (`parallelism.*`, `resources.*`, `lb.*`) and gated by an `apiVersion` header.
