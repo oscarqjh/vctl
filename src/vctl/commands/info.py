@@ -8,7 +8,15 @@ from vctl.platform import detect_self_ip
 from vctl.resolver import resolve
 
 
+def _build_subparser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="vctl info",
+        description="Print the resolved cluster + profile config as a table.",
+    )
+
+
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    _build_subparser().parse_args(argv_rest)
     rc = resolve(ns.config, profile=ns.profile)
     self_ip = detect_self_ip()
     rows = [

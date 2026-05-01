@@ -8,7 +8,16 @@ from pathlib import Path
 from vctl.config.settings import load_cluster_file
 
 
+def _build_subparser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="vctl profiles",
+        description="List available model profiles (models/*.yaml). "
+        "Marks the default profile from cluster.yaml with '*'.",
+    )
+
+
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    _build_subparser().parse_args(argv_rest)
     cluster_path = Path(ns.config).resolve()
     cf = load_cluster_file(cluster_path)
     models_dir = cluster_path.parent / "models"

@@ -85,7 +85,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--profile", default=None)
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for name in _COMMANDS:
-        sp = sub.add_parser(name, help=f"see `vctl {name} --help`")
+        # add_help=False so `vctl <cmd> --help` passes --help through to the
+        # command module's own subparser (which knows its real verbs/flags).
+        # Otherwise argparse prints an empty shallow help here and never
+        # reaches the actual command's argparse.
+        sp = sub.add_parser(
+            name, help=f"see `vctl {name} --help`", add_help=False
+        )
         sp.set_defaults(_subname=name)
     return p
 
