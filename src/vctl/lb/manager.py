@@ -101,18 +101,24 @@ class LbManager:
         pidfile to send SIGTERM directly, poll for exit with SIGKILL fallback,
         then clean up the tmux session, pidfile, and admin socket.
         """
-        # 1. SIGTERM the haproxy pid if pidfile is good.
+        # 1. SIGTERM the haproxy pid (pidfile if present, else pgrep fallback for
+        # foreground haproxy that never wrote a pidfile).
         pid: int | None = None
         if self.pid_path.exists():
             try:
                 raw = self.pid_path.read_text().strip()
                 if raw:
                     pid = int(raw.split()[0])
-                    with contextlib.suppress(ProcessLookupError, PermissionError):
-                        os.kill(pid, signal.SIGTERM)
-                        _LOG.info("sent SIGTERM to haproxy pid=%d", pid)
             except (ValueError, OSError) as e:
                 _LOG.warning("could not read pidfile %s: %s", self.pid_path, e)
+        if pid is None:
+            pid = _find_haproxy_pid_by_cfg(self.cfg_path)
+            if pid is not None:
+                _LOG.info("pidfile missing; located haproxy via cfg-path scan: pid=%d", pid)
+        if pid is not None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, signal.SIGTERM)
+                _LOG.info("sent SIGTERM to haproxy pid=%d", pid)
 
         # B3: Poll for exit up to 10s; SIGKILL fallback if still alive.
         if pid is not None:
@@ -144,8 +150,22 @@ class LbManager:
         tmux_kill(_TMUX_NAME)
 
     def reload(self) -> None:
-        if not self.pid_path.exists():
-            raise RuntimeError(f"no pidfile at {self.pid_path}; is haproxy running?")
+        # Resolve current pid: pidfile if present, else pgrep fallback.
+        current_pid: int | None = None
+        if self.pid_path.exists():
+            try:
+                raw = self.pid_path.read_text().strip()
+                if raw:
+                    current_pid = int(raw.split()[0])
+            except (ValueError, OSError):
+                current_pid = None
+        if current_pid is None:
+            current_pid = _find_haproxy_pid_by_cfg(self.cfg_path)
+        if current_pid is None:
+            raise RuntimeError(
+                f"no running haproxy found (pidfile={self.pid_path}, "
+                f"cfg={self.cfg_path}); is it running?"
+            )
         binary = ensure_haproxy()
 
         # B11: precheck config syntax before reload.
@@ -166,7 +186,7 @@ class LbManager:
                 "-p",
                 str(self.pid_path),
                 "-sf",
-                self.pid_path.read_text().strip(),
+                str(current_pid),
             ],
             capture_output=True,
             text=True,
@@ -207,6 +227,15 @@ class LbManager:
             except (ValueError, OSError):
                 pid = None
 
+        # 1b. Fallback: foreground haproxy doesn't write a pidfile (we don't emit
+        # `daemon` so the tmux pane keeps haproxy + its stdout). Scan processes
+        # for one whose cmdline includes `-f <our cfg_path>`.
+        if pid is None or not pid_alive:
+            scanned = _find_haproxy_pid_by_cfg(self.cfg_path)
+            if scanned is not None:
+                pid = scanned
+                pid_alive = True
+
         # 2. admin port reachable
         admin_reachable = False
         with (
@@ -227,6 +256,33 @@ class LbManager:
             "cfg_path": str(self.cfg_path),
             "admin_bind": f"{self.lb.admin.bind_addr}:{self.lb.admin.bind_port}",
         }
+
+
+def _find_haproxy_pid_by_cfg(cfg_path: Path) -> int | None:
+    """Locate a running haproxy process whose cmdline includes `-f <cfg_path>`.
+
+    Used as a fallback when the pidfile is missing/empty — haproxy without the
+    `daemon` directive runs in the foreground and never writes the `-p` pidfile,
+    so we have to discover the PID by scanning processes.
+    """
+    import psutil
+
+    target = str(cfg_path)
+    for proc in psutil.process_iter(["name", "cmdline"]):
+        try:
+            cmd = proc.info.get("cmdline") or []
+            if not cmd:
+                continue
+            if "haproxy" not in (proc.info.get("name") or "") and not any(
+                "haproxy" in part for part in cmd[:1]
+            ):
+                continue
+            for i, tok in enumerate(cmd):
+                if tok == "-f" and i + 1 < len(cmd) and cmd[i + 1] == target:
+                    return int(proc.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
 
 
 def _verify_pid_is_haproxy(pid: int) -> bool:
