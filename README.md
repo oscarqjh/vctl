@@ -104,6 +104,76 @@ vctl serve models/qwen3_5-9b.yaml   # positional shortcut (see below)
 
 ---
 
+## Multi-pool fleets
+
+When you serve more than one model from the same HAProxy instance, configure
+one pool per model in `cluster.yaml`:
+
+```yaml
+lb:
+  kind: haproxy
+  host: 10.1.2.3
+  pools:
+    - name: model-a
+      served_model: "Org/ModelA"
+      bind_port: 8080
+    - name: model-b
+      served_model: "Org/ModelB"
+      bind_port: 8081
+```
+
+### Schema: `lb.pools: [...]`
+
+Each entry is a `Pool` object with three fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | str | Short identifier used in HAProxy frontend/backend names and `--pool` flags. |
+| `served_model` | str | Full model name as reported by `/v1/models`. Use `"*"` to match any model (legacy single-pool). |
+| `bind_port` | int | Frontend port this pool listens on. |
+
+HAProxy emits one `frontend pool_<name>` + `backend pool_<name>` block per
+pool, so traffic to `lb:8080` reaches only Model A workers and traffic to
+`lb:8081` reaches only Model B workers.
+
+### One frontend port per model
+
+Clients should use the pool-specific URL that matches the model they want:
+
+```bash
+# Model A clients
+curl http://lb:8080/v1/chat/completions ...
+
+# Model B clients
+curl http://lb:8081/v1/chat/completions ...
+```
+
+### `vctl init-config` emits multi-pool by default
+
+Running `vctl init-config` now generates a `cluster.yaml` with a `lb.pools`
+block (one pool per built-in profile). Edit it to match your model names and
+ports.
+
+### `vctl serve` auto-routes via `pool_for_model`
+
+`vctl serve` resolves the active profile's `served_model` to the matching pool
+entry via `pool_for_model`. If no pool claims the model, it exits with code 3
+immediately — before spawning vLLM — so misconfiguration is caught early.
+
+### `vctl lb add --pool` flag for manual override
+
+By default `vctl lb add <ep>` probes `/v1/models` on the endpoint and
+auto-selects the correct pool. Pass `--pool <name>` to skip the probe and
+place the endpoint directly:
+
+```bash
+vctl lb add 10.1.2.5:8000 --pool model-a
+vctl lb drain 10.1.2.5:8000 --pool model-a
+vctl lb wait-ready 2 --pool model-a
+```
+
+---
+
 ## Concepts
 
 | Term | Description |
@@ -146,13 +216,14 @@ Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Setting
 | `lb logs` | Tail HAProxy logs. |
 | `lb config` | Print the rendered HAProxy config. |
 | `lb reload` | Reload HAProxy config without dropping connections. |
-| `lb add` | Add a backend to HAProxy (idempotent: reports `(new)` vs `(already present)`). |
+| `lb add <ep> [--pool <name>]` | Add a backend to HAProxy (idempotent). Auto-routes by `/v1/models` probe; `--pool` overrides. |
 | `lb remove` | Remove a backend from HAProxy. |
-| `lb drain` | Set a backend to DRAIN state (stops new requests, waits for in-flight). |
+| `lb drain <ep> [--pool <name>]` | Set a backend to DRAIN state (stops new requests, waits for in-flight). |
 | `lb attach` | Register a backend and wait for its `/v1/models` health probe to pass. |
 | `lb detach` | Drain then remove a backend. |
 | `lb auto-add` | Discover live backends from the state file and attach all. |
-| `lb health` | Check health of all registered backends. |
+| `lb health` | Check health of all registered backends, grouped by pool. |
+| `lb wait-ready [N] [--pool <name>]` | Wait for ≥N ready backends in every non-empty pool (or one named pool). |
 
 ### `vctl config` — schema and migration
 

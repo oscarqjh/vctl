@@ -296,6 +296,36 @@ curl http://10.119.30.181:8080/v1/models
 
 ---
 
+## v0.2.0 — Multi-pool support
+
+v0.2.0 adds multi-pool LB routing. Existing v0.1.0 deployments require **no
+changes** — a single `lb.client.bind_port` config is automatically synthesised
+into a default pool with `served_model: "*"` at load time.
+
+To adopt the new schema explicitly, run the one-shot migration command:
+
+```bash
+vctl config migrate cluster.yaml -o cluster.yaml
+```
+
+This rewrites `lb.client.bind_port: <port>` to:
+
+```yaml
+lb:
+  pools:
+    - name: default
+      served_model: "*"
+      bind_port: <port>
+```
+
+State files are also backwards-compatible: the existing
+`<state_dir>/<host>_backends.txt` is read as the `"default"` pool on first
+access. No manual state file migration is needed.
+
+See [CHANGELOG.md](CHANGELOG.md) `## [0.2.0]` for the full list of additions.
+
+---
+
 ## Coexistence (defer the haproxy swap, zero downtime)
 
 If you can't take a downtime window now but want the new CLI:

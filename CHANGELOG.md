@@ -5,6 +5,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Se
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-01
+
+### Added
+- Multi-pool LB routing: `lb.pools: [...]` in cluster.yaml; one HAProxy frontend per served model.
+- `vctl serve` fail-fast pool routing — exits 3 (within seconds) if no pool serves the profile's model, before spawning vllm.
+- `vctl lb add <ep> [--pool <name>]` — auto-routes by `/v1/models` probe; `--pool` overrides.
+- `vctl lb drain <ep> [--pool <name>]` — explicit pool selection.
+- `vctl lb wait-ready [N] [--pool <name>]` — waits for ≥N ready in every non-empty pool (or one).
+- `vctl lb list` / `vctl lb health` — output grouped by pool with per-pool URLs / pass/fail rollup.
+- `vctl info` lists every pool's URL annotated with served_model.
+- `vctl init-config` template now generates a multi-pool `cluster.yaml`.
+- `pool_for_model` and `pool_for_endpoint` in new `vctl.lb.routing` module.
+- Per-pool state files: `<state_dir>/<lb_host>/<pool>_backends.txt` with stable `.lock` sidecar.
+
+### Changed
+- HAProxy renderer emits one `frontend pool_<name>` + `backend pool_<name>` block per pool.
+- `BackendState` accepts a `pool=<name>` argument; default `"default"` for legacy callers.
+- `cluster.yaml` schema gains `lb.pools: list[Pool]`. Legacy `lb.client.bind_port` remains accepted; the loader synthesizes a single default pool with `served_model: "*"`.
+- `config migrate` writes `lb.pools` instead of `lb.client.bind_port`.
+
+### Deprecated
+- `lb.client.bind_port` (still works via auto-synthesis; new configs should use `lb.pools`).
+
+### Migration
+- Existing v0.1.0 deployments require no changes — yaml auto-loads with synthesized default pool.
+- One-shot canonicalize: `vctl config migrate cluster.yaml`.
+- State files migrate in place on first read of the default pool.
+
 ## [0.1.0] - 2026-05-01
 
 ### Added
