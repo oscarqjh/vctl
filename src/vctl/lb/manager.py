@@ -177,6 +177,13 @@ class LbManager:
             )
         binary = ensure_haproxy()
 
+        # F9: re-render cluster.yaml + state file → cfg before reload, otherwise
+        # `lb reload` after a config edit silently re-execs haproxy on the
+        # stale on-disk cfg (the previous bug: editing cluster.yaml then
+        # `vctl lb reload` left HAProxy on the old config).
+        cfg = self.render_config()
+        self.cfg_path.write_text(cfg)
+
         # B11: precheck config syntax before reload.
         pre = subprocess.run(
             [binary, "-c", "-f", str(self.cfg_path)],
