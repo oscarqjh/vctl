@@ -162,39 +162,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         mgr.reload()
         return 0
     if verb == "list":
-        pools = mgr.lb.pools
-        # Detect LB liveness so we can annotate state-file content correctly.
-        # When LB is up: state file == live haproxy pool (per add/remove sync).
-        # When LB is down: state file is the persistent registry for the
-        # next `lb start` + `auto-add`. Backends shown are NOT actually
-        # serving traffic. Annotate to avoid confusion.
-        st = mgr.status()
-        lb_running = bool(st.get("running"))
-        if not lb_running:
-            print(
-                "WARNING: LB is not running. The entries below are persisted "
-                "registrations from the state file — they are NOT serving "
-                "traffic right now. Run `vctl lb start` to bring them back."
-            )
-            print()
-
-        found_any = False
-        for pool in pools:
-            pbs = BackendState(bs.state_dir, bs.lb_host, pool=pool.name)
-            eps = pbs.list()
-            url = f"http://{mgr.lb.host}:{pool.bind_port}"
-            suffix = "" if lb_running else "  [LB STOPPED]"
-            print(f"pool: {pool.name} ({pool.served_model}) — {url}{suffix}")
-            if eps:
-                for ep in eps:
-                    print(f"  {ep}")
-                found_any = True
-            else:
-                print("  (no backends)")
-        if not found_any:
-            print()
-            print("(no backends registered in any pool)")
-        return 0
+        return _do_list(mgr, bs)
     if verb == "wait-ready":
         return _wait_ready(mgr, parsed.count, pool_filter=parsed.pool)
     if verb == "install":
@@ -214,6 +182,156 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     from vctl.commands import lb_scaling
 
     return lb_scaling.dispatch(verb, parsed, ns, mgr, bs)
+
+
+def _do_list(mgr: LbManager, bs: BackendState) -> int:
+    """F6: lb list with live-registration annotation.
+
+    When LB is up, cross-references state file against haproxy admin socket
+    and marks each endpoint as:
+      ✓ live          — in state file AND registered in haproxy
+      ⚠ tracked-only  — in state file, not in haproxy (auto-add will fix)
+      ⚠ untracked     — in haproxy, not in state file (lb add adopts it)
+
+    When LB is stopped, keeps the existing [LB STOPPED] banner and skips
+    the admin socket query entirely.  Admin socket errors degrade gracefully.
+    Exit code is always 0 (informational, not a check command).
+    """
+    from vctl.commands.lb_scaling import _client
+
+    pools = mgr.lb.pools
+
+    # Detect LB liveness so we can annotate state-file content correctly.
+    # When LB is up: state file == live haproxy pool (per add/remove sync).
+    # When LB is down: state file is the persistent registry for the
+    # next `lb start` + `auto-add`. Backends shown are NOT actually
+    # serving traffic. Annotate to avoid confusion.
+    st = mgr.status()
+    lb_running = bool(st.get("running"))
+    if not lb_running:
+        print(
+            "WARNING: LB is not running. The entries below are persisted "
+            "registrations from the state file — they are NOT serving "
+            "traffic right now. Run `vctl lb start` to bring them back."
+        )
+        print()
+
+    # F6: Build live-registry map from haproxy admin socket (only when LB up).
+    # Mapping: pool_name -> set of "ip:port" strings actually in haproxy.
+    live_registry: dict[str, set[str]] | None = None
+    live_query_failed = False
+    if lb_running:
+        cli = _client(mgr)
+        if cli is None:
+            live_query_failed = True
+        else:
+            try:
+                live_registry = _build_live_registry(cli)
+            except Exception as exc:
+                _LOG.debug("_build_live_registry raised: %s", exc)
+                live_query_failed = True
+
+    if live_query_failed:
+        print("WARNING: could not query live haproxy state — showing state-file entries only")
+        print()
+
+    found_any = False
+    for pool in pools:
+        pbs = BackendState(bs.state_dir, bs.lb_host, pool=pool.name)
+        eps = pbs.list()
+        url = f"http://{mgr.lb.host}:{pool.bind_port}"
+        suffix = "" if lb_running else "  [LB STOPPED]"
+        print(f"pool: {pool.name} ({pool.served_model}) — {url}{suffix}")
+
+        if not lb_running:
+            # LB stopped — plain listing, no live annotation.
+            if eps:
+                for ep in eps:
+                    print(f"  {ep}")
+                found_any = True
+            else:
+                print("  (no backends)")
+            continue
+
+        # LB is running — annotate with live status.
+        backend_section = f"pool_{pool.name}"
+        live_eps: set[str] = set()
+        if live_registry is not None:
+            live_eps = live_registry.get(backend_section, set())
+
+        state_set = set(eps)
+
+        if live_query_failed:
+            # Can't distinguish live vs tracked-only — show all as tracked-only.
+            if eps:
+                for ep in eps:
+                    print(f"  {ep}  [tracked-only; live state unknown]")
+                found_any = True
+            else:
+                print("  (no backends)")
+            continue
+
+        # Annotate state-file entries.
+        if eps:
+            for ep in eps:
+                if ep in live_eps:
+                    print(f"  {ep}  ✓ live")
+                else:
+                    print(f"  {ep}  ⚠ tracked-only (run `vctl lb auto-add`)")
+            found_any = True
+
+        # Report untracked endpoints: in haproxy live, NOT in state file.
+        untracked = sorted(live_eps - state_set)
+        for ep in untracked:
+            print(f"  {ep}  ⚠ untracked  (run `vctl lb add {ep}` to track)")
+            found_any = True
+
+        if not eps and not untracked:
+            print("  (no backends)")
+
+    if not found_any:
+        print()
+        print("(no backends registered in any pool)")
+    return 0
+
+
+def _build_live_registry(cli: object) -> dict[str, set[str]]:
+    """Parse ``show servers state`` and return backend_section -> set[endpoint].
+
+    We re-issue the raw command so we can capture the backend column (column 2
+    in the output, which RuntimeClient.show_servers_state() discards).
+    Falls back to RuntimeClient.show_servers_state() if the raw method is
+    unavailable (e.g. _NoOpClient stub in tests).
+    """
+    from vctl.lb.runtime import RuntimeClient, _parse_endpoint_from_name
+
+    registry: dict[str, set[str]] = {}
+
+    if isinstance(cli, RuntimeClient):
+        raw = cli._send("show servers state")  # noqa: SLF001
+        for line in raw.splitlines():
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+            backend_section = parts[1]  # column 1: backend name
+            name = parts[3]             # column 3: server name
+            srv_addr = parts[4]         # column 4: srv_addr
+            parsed = _parse_endpoint_from_name(name)
+            if parsed is not None:
+                endpoint = f"{parsed[0]}:{parsed[1]}"
+            elif srv_addr == "0.0.0.0":
+                continue
+            else:
+                endpoint = srv_addr
+            registry.setdefault(backend_section, set()).add(endpoint)
+        return registry
+
+    # For any other client type (e.g. test stubs) we have no way to obtain the
+    # backend-section column, so we return an empty registry — callers degrade
+    # gracefully to tracked-only annotation.
+    return registry
 
 
 def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:

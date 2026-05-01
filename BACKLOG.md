@@ -20,6 +20,14 @@
 - [ ] F5: optional: emit `daemon` directive in render.py + redirect stdout log to a file
   so we get both pidfile AND captured logs. Tradeoff: tmux pane closes immediately, lose
   interactive `tmux attach`. Probably not worth — F1 already covers status/stop.
+- [x] F6: `lb list` live-registration annotation — cross-reference state file against
+  `show servers state` from haproxy admin socket so each entry is marked:
+    ✓ live           — in state file AND registered in haproxy
+    ⚠ tracked-only   — in state file, not in haproxy (auto-add will fix)
+    ⚠ untracked      — in haproxy, not in state file (lb add adopts it)
+  When LB is stopped, existing [LB STOPPED] banner is kept and no admin socket call is
+  attempted. Admin socket errors degrade gracefully to a WARNING line + tracked-only
+  annotation. Exit code stays 0 even when drift exists.
 
 ## Code review findings (2026-05-01) — v0.2.1 hardening
 
