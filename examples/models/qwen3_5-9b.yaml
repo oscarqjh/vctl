@@ -1,15 +1,16 @@
-# vctl profile: Qwen3-9B (dense, text-only)
+# vctl profile: Qwen3.5-9B (dense, text-only)
 # Schema version: vctl/v1
-# Apply: `vctl --profile qwen3-9b serve`  (or set as cluster.profile)
+# Apply: `vctl --profile qwen3_5-9b serve`  (or set as cluster.profile)
 
 apiVersion: vctl/v1
 kind: Profile
 
 model:
   # HuggingFace repo or local path.
-  name: Qwen/Qwen3-9B
+  name: Qwen/Qwen3.5-9B
   # OpenAI-compatible model_id exposed by `/v1/models`.
-  served_as: qwen3-9b
+  # `_` instead of `.` for shell-friendly filename / cli arg.
+  served_as: qwen3_5-9b
 
 resources:
   # Total GPUs to claim on the host.

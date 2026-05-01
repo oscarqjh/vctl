@@ -6,14 +6,14 @@
 # Env overrides: VCTL_<SECTION>__<FIELD>=value (double-underscore = nested)
 #   e.g. VCTL_LB__HOST=10.0.0.42
 #        VCTL_LB__CLIENT__BIND_PORT=8000
-#        VCTL_PROFILE=qwen3-9b   (or MODEL_PROFILE — alias)
+#        VCTL_PROFILE=qwen3_5-9b  (or MODEL_PROFILE — alias)
 
 apiVersion: vctl/v1
 kind: Cluster
 
 # Default profile loaded when --profile is not passed.
 # Lookup order: --profile > VCTL_PROFILE > MODEL_PROFILE > this field.
-profile: qwen3-9b
+profile: qwen3_5-9b
 
 cluster:
   # Path to the venv containing the vllm binary. `<venv>/bin` is prepended

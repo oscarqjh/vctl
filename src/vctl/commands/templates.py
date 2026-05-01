@@ -14,14 +14,14 @@ CLUSTER_TEMPLATE = """\
 # Env overrides: VCTL_<SECTION>__<FIELD>=value (double-underscore = nested)
 #   e.g. VCTL_LB__HOST=10.0.0.42
 #        VCTL_LB__CLIENT__BIND_PORT=8000
-#        VCTL_PROFILE=qwen3-9b   (or MODEL_PROFILE — alias)
+#        VCTL_PROFILE=qwen3_5-9b  (or MODEL_PROFILE — alias)
 
 apiVersion: vctl/v1
 kind: Cluster
 
 # Default profile loaded when --profile is not passed.
 # Lookup order: --profile > VCTL_PROFILE > MODEL_PROFILE > this field.
-profile: qwen3-9b
+profile: qwen3_5-9b
 
 cluster:
   # Path to the venv containing the vllm binary. `<venv>/bin` is prepended
@@ -91,19 +91,20 @@ lb:
     timeout_server: 1h
 """
 
-QWEN3_9B_PROFILE = """\
-# vctl profile: Qwen3-9B (dense, text-only)
+QWEN3_5_9B_PROFILE = """\
+# vctl profile: Qwen3.5-9B (dense, text-only)
 # Schema version: vctl/v1
-# Apply: `vctl --profile qwen3-9b serve`  (or set as cluster.profile)
+# Apply: `vctl --profile qwen3_5-9b serve`  (or set as cluster.profile)
 
 apiVersion: vctl/v1
 kind: Profile
 
 model:
   # HuggingFace repo or local path.
-  name: Qwen/Qwen3-9B
+  name: Qwen/Qwen3.5-9B
   # OpenAI-compatible model_id exposed by `/v1/models`.
-  served_as: qwen3-9b
+  # `_` instead of `.` for shell-friendly filename / cli arg.
+  served_as: qwen3_5-9b
 
 resources:
   # Total GPUs to claim on the host.
@@ -207,7 +208,7 @@ env:
 """
 
 PROFILE_TEMPLATES: dict[str, str] = {
-    "qwen3-9b": QWEN3_9B_PROFILE,
+    "qwen3_5-9b": QWEN3_5_9B_PROFILE,
     "qwen3-vl-30b-a3b": QWEN3_VL_30B_A3B_PROFILE,
     "qwen3-vl-9b": QWEN3_VL_9B_PROFILE,
 }

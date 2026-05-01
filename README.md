@@ -40,7 +40,7 @@ The fastest way to start is with `vctl init-config`, which scaffolds a fully-doc
 vctl init-config
 # Created:
 #   ./cluster.yaml
-#   ./models/qwen3-9b.yaml
+#   ./models/qwen3_5-9b.yaml
 #   ./models/qwen3-vl-30b-a3b.yaml
 #   ./models/qwen3-vl-9b.yaml
 ```
@@ -58,10 +58,10 @@ Options:
 Example — scaffold only one profile into a new directory:
 
 ```bash
-vctl init-config --dir /opt/myconfig --profiles qwen3-9b
+vctl init-config --dir /opt/myconfig --profiles qwen3_5-9b
 ```
 
-Available built-in profiles: `qwen3-9b`, `qwen3-vl-30b-a3b`, `qwen3-vl-9b`.
+Available built-in profiles: `qwen3_5-9b`, `qwen3-vl-30b-a3b`, `qwen3-vl-9b`.
 
 ### 1. Write a cluster config (manual alternative)
 
@@ -94,7 +94,7 @@ Prints a resolved table of cluster + profile settings sourced from `cluster.yaml
 
 ```bash
 vctl serve                        # uses profile from cluster.yaml
-vctl serve models/qwen3-9b.yaml   # positional shortcut (see below)
+vctl serve models/qwen3_5-9b.yaml   # positional shortcut (see below)
 ```
 
 `vctl serve` will:
@@ -171,9 +171,9 @@ Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Setting
 When a path (or bare name) is given as the first positional argument to `serve` or `stop`, vctl treats it as `--profile`:
 
 ```bash
-vctl serve models/qwen3-9b.yaml
+vctl serve models/qwen3_5-9b.yaml
 # equivalent to:
-vctl serve --profile qwen3-9b
+vctl serve --profile qwen3_5-9b
 ```
 
 The `.yaml` extension and any leading directory components are stripped to derive the profile name.

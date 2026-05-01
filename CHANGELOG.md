@@ -25,7 +25,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Se
 - GitHub Actions CI matrix (3.10/3.11/3.12), ruff + mypy --strict + pytest, coverage gate ≥50% (AT-15).
 - HAProxy admin-state bitmask handling (MAINT 0x07, DRAIN 0x38) — drained backends NOT counted as ready in `wait-ready`.
 - `wait-ready` dual-check: ready_count + LB front HTTP 200 (AT-12).
-- Positional profile shortcut: `vctl serve models/qwen3-9b.yaml`.
+- Positional profile shortcut: `vctl serve models/qwen3_5-9b.yaml`.
 - `vctl init-config` — scaffolds a fully-documented `cluster.yaml` + `models/<name>.yaml` profiles in one step.
 
 ### Changed

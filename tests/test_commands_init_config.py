@@ -23,7 +23,7 @@ def test_init_config_creates_files(tmp_path: Path) -> None:
     proc = _vctl("init-config", "--dir", str(tmp_path))
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "cluster.yaml").exists()
-    for name in ("qwen3-9b", "qwen3-vl-30b-a3b", "qwen3-vl-9b"):
+    for name in ("qwen3_5-9b", "qwen3-vl-30b-a3b", "qwen3-vl-9b"):
         assert (tmp_path / "models" / f"{name}.yaml").exists()
 
 
@@ -32,8 +32,9 @@ def test_init_config_files_validate(tmp_path: Path) -> None:
     _vctl("init-config", "--dir", str(tmp_path))
     cf = load_cluster_file(tmp_path / "cluster.yaml")
     assert cf.lb.kind == "haproxy"
-    pf = load_profile_file(tmp_path / "models" / "qwen3-9b.yaml")
+    pf = load_profile_file(tmp_path / "models" / "qwen3_5-9b.yaml")
     assert pf.parallelism.data_parallel == 8
+    assert pf.model.name == "Qwen/Qwen3.5-9B"
 
 
 def test_init_config_refuses_overwrite_without_force(tmp_path: Path) -> None:
@@ -51,9 +52,9 @@ def test_init_config_force_overwrites(tmp_path: Path) -> None:
 
 
 def test_init_config_subset_profiles(tmp_path: Path) -> None:
-    proc = _vctl("init-config", "--dir", str(tmp_path), "--profiles", "qwen3-9b")
+    proc = _vctl("init-config", "--dir", str(tmp_path), "--profiles", "qwen3_5-9b")
     assert proc.returncode == 0
-    assert (tmp_path / "models" / "qwen3-9b.yaml").exists()
+    assert (tmp_path / "models" / "qwen3_5-9b.yaml").exists()
     assert not (tmp_path / "models" / "qwen3-vl-30b-a3b.yaml").exists()
 
 
