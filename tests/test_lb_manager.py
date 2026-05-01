@@ -49,7 +49,7 @@ def test_start_with_force_proceeds(mock_ip, mock_ens, mock_tmux, tmp_path: Path)
     mgr.start(force=True)
     assert mock_tmux.called
     cfg = (tmp_path / "haproxy.cfg").read_text()
-    assert "frontend http-in" in cfg
+    assert "frontend pool_default" in cfg
 
 
 @patch("vctl.lb.manager.tmux_kill")

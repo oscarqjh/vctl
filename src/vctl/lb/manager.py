@@ -33,8 +33,11 @@ class LbManager:
         return detect_self_ip() == self.lb.host
 
     def render_config(self) -> str:
-        backends = BackendState(self.state_dir, self.lb.host).list()
-        return render_haproxy_cfg(self.lb, self.runtime_paths, backends)
+        backends_by_pool: dict[str, list[str]] = {}
+        for pool in self.lb.pools:
+            bs = BackendState(self.state_dir, self.lb.host, pool=pool.name)
+            backends_by_pool[pool.name] = bs.list()
+        return render_haproxy_cfg(self.lb, self.runtime_paths, backends_by_pool)
 
     def start(self, force: bool = False) -> None:
         self_ip = detect_self_ip()
