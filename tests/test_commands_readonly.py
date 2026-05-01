@@ -49,3 +49,39 @@ def test_args_emits_one_flag_per_line(tmp_path: Path) -> None:
     assert any(ln.startswith("--") for ln in lines)
     assert any("Qwen/Qwen3.5-9B" in ln for ln in lines)
     assert any("data-parallel-size" in ln or "--data-parallel" in ln for ln in lines)
+
+
+def test_info_shows_per_pool_urls(tmp_path: Path) -> None:
+    """vctl info lists each pool's URL annotated with served_model."""
+    # Use the multi-pool fixture pattern
+    (tmp_path / "cluster.yaml").write_text(
+        "apiVersion: vctl/v1\nkind: Cluster\n"
+        "cluster: { venv: /v, state_dir: /s, env: {} }\n"
+        "profile: a\n"
+        "lb:\n"
+        "  kind: haproxy\n  host: 10.0.0.1\n"
+        "  admin: { bind_port: 9001 }\n"
+        "  stats: { bind_port: 9000 }\n"
+        "  algorithm: leastconn\n"
+        "  health: { path: /health, check_interval: 5s, fall: 3, rise: 2 }\n"
+        "  defaults: { maxconn_per_backend: 256, slowstart: 30s, "
+        "timeout_connect: 5s, timeout_client: 1h, timeout_server: 1h }\n"
+        "  pools:\n"
+        "    - { name: a, served_model: M/A, bind_port: 8080 }\n"
+        "    - { name: b, served_model: M/B, bind_port: 8081 }\n"
+    )
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "a.yaml").write_text(
+        "apiVersion: vctl/v1\nkind: Profile\n"
+        "model: { name: M/A, served_as: a }\n"
+        "resources: { num_gpus: 1, cuda_visible_devices: '0' }\n"
+        "parallelism: { data_parallel: 1, tensor_parallel: 1, api_server_count: 1 }\n"
+        "server: { http_port: 8000 }\nvllm_args: {}\nenv: {}\n"
+    )
+    proc = _vctl("info", cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert "pool[a]" in proc.stdout
+    assert "pool[b]" in proc.stdout
+    assert "M/A" in proc.stdout and "M/B" in proc.stdout
+    assert "http://10.0.0.1:8080" in proc.stdout
+    assert "http://10.0.0.1:8081" in proc.stdout
