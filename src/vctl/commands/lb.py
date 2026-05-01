@@ -143,8 +143,20 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         mgr.stop()
         return 0
     if verb == "status":
-        for k, v in mgr.status().items():
-            print(f"{k}: {v}")
+        st = mgr.status()
+        if st.get("is_local_host"):
+            for k, v in st.items():
+                print(f"{k}: {v}")
+        else:
+            # F4: running on a worker pod — remote LB; pid/tmux are local-only
+            host = mgr.lb.host
+            admin_port = mgr.lb.admin.bind_port
+            admin_reachable = st.get("admin_reachable", False)
+            print(f"remote LB at {host}:{admin_port} — admin_reachable={admin_reachable}")
+            print(
+                "# pidfile/tmux are local-only; "
+                "status only checks reachability from this host"
+            )
         return 0
     if verb == "reload":
         mgr.reload()

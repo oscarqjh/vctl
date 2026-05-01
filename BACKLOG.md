@@ -9,13 +9,13 @@
   ignores `-p pidfile` flag, pidfile never written. status() reported `pid:None, pid_alive:False`
   while haproxy was actually running. Fixed via `_find_haproxy_pid_by_cfg(cfg_path)` helper
   using psutil.process_iter; status/stop/reload all consult it after the pidfile path.
-- [ ] F2: integration tests `test_haproxy_register_drain_remove_cycle` and
+- [x] F2: integration tests `test_haproxy_register_drain_remove_cycle` and
   `test_haproxy_two_pools_with_distinct_backends` use the hard-coded `_TMUX_NAME = "vctl-lb"`
   and collide with a running real LB on dev machines. Parameterize tmux session name per
   test (e.g. `vctl-lb-test-<random>`) and ensure teardown kills the spawned haproxy.
-- [ ] F3: those same tests leak ~80 haproxy processes per CI run (each test spawns real
+- [x] F3: those same tests leak ~80 haproxy processes per CI run (each test spawns real
   haproxy without try/finally teardown). Audit teardown across the integration test file.
-- [ ] F4: `lb status` UX — when self-IP != lb.host, report "remote LB; pid is local-only"
+- [x] F4: `lb status` UX — when self-IP != lb.host, report "remote LB; pid is local-only"
   instead of pretending pid=None means trouble.
 - [ ] F5: optional: emit `daemon` directive in render.py + redirect stdout log to a file
   so we get both pidfile AND captured logs. Tradeoff: tmux pane closes immediately, lose

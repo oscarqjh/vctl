@@ -16,6 +16,7 @@ from vctl.lb.installer import ensure_haproxy
 from vctl.lb.render import RuntimePaths, render_haproxy_cfg
 from vctl.lb.state import BackendState
 from vctl.platform import (
+    _validate_tmux_name,
     detect_self_ip,
     tmux_kill,
     tmux_run_detached_argv,
@@ -27,7 +28,14 @@ _TMUX_NAME = "vctl-lb"
 
 
 class LbManager:
-    def __init__(self, lb: LbHaproxy, state_dir: Path, run_dir: Path) -> None:
+    def __init__(
+        self,
+        lb: LbHaproxy,
+        state_dir: Path,
+        run_dir: Path,
+        tmux_name: str = "vctl-lb",
+    ) -> None:
+        _validate_tmux_name(tmux_name)
         self.lb = lb
         self.state_dir = Path(state_dir)
         self.run_dir = Path(run_dir)
@@ -35,6 +43,7 @@ class LbManager:
         self.cfg_path = self.run_dir / "haproxy.cfg"
         self.pid_path = self.run_dir / "haproxy.pid"
         self.sock_path = self.run_dir / "haproxy.sock"
+        self.tmux_name = tmux_name
         # B12: run legacy migration once at manager init (flock-protected inside BackendState)
         BackendState.migrate_if_needed(self.state_dir, self.lb.host)
 
@@ -88,10 +97,10 @@ class LbManager:
         binary = ensure_haproxy()
         # E3: use argv form so paths with spaces are quoted correctly
         tmux_run_detached_argv(
-            _TMUX_NAME,
+            self.tmux_name,
             [binary, "-f", str(self.cfg_path), "-p", str(self.pid_path)],
         )
-        _LOG.info("haproxy started in tmux session %s", _TMUX_NAME)
+        _LOG.info("haproxy started in tmux session %s", self.tmux_name)
 
     def stop(self) -> None:
         """Stop haproxy reliably.
@@ -147,7 +156,7 @@ class LbManager:
             self.sock_path.unlink()
 
         # 2. Tear down the tmux session if it exists (idempotent).
-        tmux_kill(_TMUX_NAME)
+        tmux_kill(self.tmux_name)
 
     def reload(self) -> None:
         # Resolve current pid: pidfile if present, else pgrep fallback.
@@ -245,7 +254,10 @@ class LbManager:
             admin_reachable = True
 
         # 3. tmux-managed (informational only)
-        tmux_managed = tmux_session_exists(_TMUX_NAME)
+        tmux_managed = tmux_session_exists(self.tmux_name)
+
+        # F4: is_local_host — True when our IP matches lb.host
+        is_local_host = detect_self_ip() == self.lb.host
 
         return {
             "running": pid_alive or admin_reachable,
@@ -255,6 +267,7 @@ class LbManager:
             "tmux_managed": tmux_managed,
             "cfg_path": str(self.cfg_path),
             "admin_bind": f"{self.lb.admin.bind_addr}:{self.lb.admin.bind_port}",
+            "is_local_host": is_local_host,
         }
 
 
