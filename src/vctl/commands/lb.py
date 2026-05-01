@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 
 from vctl.lb.manager import LbManager
-from vctl.lb.runtime import BackendStatus, RuntimeClient
 from vctl.lb.state import BackendState
 from vctl.resolver import resolve
 
@@ -36,6 +35,7 @@ def _build_subparser() -> argparse.ArgumentParser:
     sp.add_parser("start").add_argument("--force", action="store_true")
     wr = sp.add_parser("wait-ready")
     wr.add_argument("count", type=int, nargs="?", default=1)
+    wr.add_argument("--pool", default=None, help="scope to a single pool")
     sp.add_parser("auto-add")
     add = sp.add_parser("add")
     add.add_argument("endpoint")
@@ -93,11 +93,25 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         mgr.reload()
         return 0
     if verb == "list":
-        for ep in bs.list():
-            print(ep)
+        pools = mgr.lb.pools
+        found_any = False
+        for pool in pools:
+            pbs = BackendState(bs.state_dir, bs.lb_host, pool=pool.name)
+            eps = pbs.list()
+            url = f"http://{mgr.lb.host}:{pool.bind_port}"
+            print(f"pool: {pool.name} ({pool.served_model}) — {url}")
+            if eps:
+                for ep in eps:
+                    print(f"  {ep}")
+                found_any = True
+            else:
+                print("  (no backends)")
+        if not found_any:
+            print()
+            print("(no backends registered in any pool)")
         return 0
     if verb == "wait-ready":
-        return _wait_ready(mgr, parsed.count)
+        return _wait_ready(mgr, parsed.count, pool_filter=parsed.pool)
     if verb == "install":
         from vctl.lb.installer import ensure_haproxy
 
@@ -117,90 +131,75 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     return lb_scaling.dispatch(verb, parsed, ns, mgr, bs)
 
 
-def _wait_ready(mgr: LbManager, n: int) -> int:
-    """Block until >=n backends are READY (op=UP, admin not maint/drain) AND
-    LB front responds 200 to /v1/models. Default timeout infinite;
+def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:
+    """Block until each non-empty target pool has >=n ready backends AND its
+    front-port returns 200 on /v1/models. Empty pools are skipped (not blocking).
+
     LB_WAIT_TIMEOUT (seconds, 0 = forever) env override.
 
-    Drained backends still report op_state=UP — naive count is wrong.
+    Note: the `n` threshold is checked per-pool based on the number of registered
+    backends in each pool's state file combined with a live HTTP probe of the
+    pool's front-port. HAProxy admin-socket per-server state is not inspected.
     """
     import httpx
 
-    timeout = os.environ.get("LB_WAIT_TIMEOUT")
+    timeout_str = os.environ.get("LB_WAIT_TIMEOUT")
     deadline = None
-    if timeout is not None:
+    if timeout_str is not None:
         try:
-            t = float(timeout)
+            t = float(timeout_str)
             if t > 0:
                 deadline = time.monotonic() + t
         except ValueError:
             pass
 
-    def _try_runtime(connect_timeout: float = 1.0) -> list[BackendStatus]:
-        import socket as _socket
+    target_pools = [p for p in mgr.lb.pools if pool_filter is None or p.name == pool_filter]
+    if pool_filter and not target_pools:
+        print(
+            f"unknown pool {pool_filter!r}; available: {[p.name for p in mgr.lb.pools]}",
+            file=sys.stderr,
+        )
+        return 3
 
-        try:
-            sock_path = mgr.sock_path
-            if sock_path.exists():
-                s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-                s.settimeout(connect_timeout)
-                s.connect(str(sock_path))
-                rc = RuntimeClient.for_unix_fd(s)
-            else:
-                s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-                s.settimeout(connect_timeout)
-                s.connect((mgr.lb.host, mgr.lb.admin.bind_port))
-                rc = RuntimeClient.for_unix_fd(s)
-            return rc.show_servers_state()
-        except OSError:
-            return []
-
-    front_url = f"http://{mgr.lb.host}:{mgr.lb.pools[0].bind_port}/v1/models"
+    state_dir = mgr.state_dir if isinstance(mgr.state_dir, Path) else Path(mgr.state_dir)
     last_log = 0.0
     while True:
-        # Short socket connect timeout — capped by remaining deadline.
-        sock_timeout = 1.0
-        if deadline is not None:
-            sock_timeout = min(sock_timeout, max(0.05, deadline - time.monotonic()))
-        statuses = _try_runtime(connect_timeout=sock_timeout)
-        ready = sum(1 for s in statuses if s.op == "UP" and s.admin == "ready")
+        all_pools_ok = True
+        any_pool_has_backends = False
+        details: list[str] = []
+        for p in target_pools:
+            pbs = BackendState(state_dir, mgr.lb.host, pool=p.name)
+            registered = pbs.list()
+            if not registered:
+                details.append(f"{p.name}=empty")
+                continue
+            any_pool_has_backends = True
+            url = f"http://{mgr.lb.host}:{p.bind_port}/v1/models"
+            try:
+                r = httpx.get(url, timeout=3.0)
+                code = r.status_code
+            except Exception:
+                code = 0
+            backends_label = f"{len(registered)}backend{'s' if len(registered) != 1 else ''}"
+            details.append(f"{p.name}={backends_label}/{code or 'ERR'}")
+            if code != 200 or len(registered) < n:
+                all_pools_ok = False
 
-        # Compute remaining time for this iteration's http probe.
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                print(
-                    f"timed out: {ready}/{n} ready, LB front=ERR after {timeout}s",
-                    file=sys.stderr,
-                )
-                return 1
-            http_timeout = min(3.0, remaining)
-        else:
-            http_timeout = 3.0
-
-        front_code = 0
-        try:
-            r = httpx.get(front_url, timeout=http_timeout)
-            front_code = r.status_code
-        except (httpx.HTTPError, httpx.TransportError, Exception):
-            front_code = 0
-
-        if ready >= n and front_code == 200:
-            print(f"{ready} backend(s) ready (needed {n}); LB front responds 200")
+        if all_pools_ok and any_pool_has_backends:
+            print(f"all pools ready: {', '.join(details)}")
             return 0
 
         if deadline is not None and time.monotonic() > deadline:
             print(
-                f"timed out: {ready}/{n} ready, LB front={front_code or 'ERR'} after {timeout}s",
+                f"timed out: {', '.join(details)} (after {timeout_str}s)",
                 file=sys.stderr,
             )
             return 1
 
         now = time.monotonic()
         if now - last_log >= 30:
-            print(f"waiting... {ready}/{n} ready, LB front={front_code or 'ERR'}", file=sys.stderr)
+            print(f"waiting... {', '.join(details)}", file=sys.stderr)
             last_log = now
-        # Sleep at most until deadline (or 2s if no deadline).
         sleep_s = 2.0
         if deadline is not None:
             sleep_s = min(sleep_s, max(0.0, deadline - time.monotonic()))

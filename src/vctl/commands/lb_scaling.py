@@ -211,15 +211,22 @@ def _do_auto_add(mgr: LbManager, bs: BackendState) -> int:
 
 def _do_health(mgr: LbManager, bs: BackendState) -> int:
     unhealthy = 0
-    for ep in bs.list():
-        port = int(ep.rsplit(":", 1)[1])
-        probe = probe_local_vllm(port)
-        ok = probe.get("healthy", False)
-        marker = "OK" if ok else "FAIL"
-        print(
-            f"{ep:30s} {marker}  health={probe.get('health_code')} "
-            f"models_loaded={probe.get('models_loaded')}"
-        )
-        if not ok:
-            unhealthy += 1
+    for pool in mgr.lb.pools:
+        pbs = BackendState(bs.state_dir, bs.lb_host, pool=pool.name)
+        eps = pbs.list()
+        if not eps:
+            print(f"pool: {pool.name} ({pool.served_model}) — (no backends)")
+            continue
+        print(f"pool: {pool.name} ({pool.served_model})")
+        for ep in eps:
+            port = int(ep.rsplit(":", 1)[1])
+            probe = probe_local_vllm(port)
+            ok = probe.get("healthy", False)
+            marker = "OK" if ok else "FAIL"
+            print(
+                f"  {ep:30s} {marker}  health={probe.get('health_code')} "
+                f"models_loaded={probe.get('models_loaded')}"
+            )
+            if not ok:
+                unhealthy += 1
     return 0 if unhealthy == 0 else unhealthy
