@@ -211,21 +211,38 @@ def _do_auto_add(mgr: LbManager, bs: BackendState) -> int:
 
 def _do_health(mgr: LbManager, bs: BackendState) -> int:
     unhealthy = 0
-    for pool in mgr.lb.pools:
+    use_color = sys.stdout.isatty()
+    green = "\x1b[32m" if use_color else ""
+    red = "\x1b[31m" if use_color else ""
+    dim = "\x1b[2m" if use_color else ""
+    reset = "\x1b[0m" if use_color else ""
+
+    pools = list(mgr.lb.pools)
+    for i, pool in enumerate(pools):
+        if i > 0:
+            print()  # blank line between pools
         pbs = BackendState(bs.state_dir, bs.lb_host, pool=pool.name)
         eps = pbs.list()
+        url = f"http://{mgr.lb.host}:{pool.bind_port}"
+        header = f"pool: {pool.name} ({pool.served_model})  {dim}→ {url}{reset}"
         if not eps:
-            print(f"pool: {pool.name} ({pool.served_model}) — (no backends)")
+            print(f"{header}  {dim}— (no backends){reset}")
             continue
-        print(f"pool: {pool.name} ({pool.served_model})")
+        print(header)
+        # Aligned columns: endpoint | status | /health | model | running
+        col_w = max(len(ep) for ep in eps)
         for ep in eps:
             port = int(ep.rsplit(":", 1)[1])
             probe = probe_local_vllm(port)
             ok = probe.get("healthy", False)
-            marker = "OK" if ok else "FAIL"
+            color = green if ok else red
+            marker = "OK  " if ok else "FAIL"
+            health = probe.get("health_code", "?")
+            loaded = "yes" if probe.get("models_loaded") else "no"
+            running = probe.get("num_requests_running", 0.0)
             print(
-                f"  {ep:30s} {marker}  health={probe.get('health_code')} "
-                f"models_loaded={probe.get('models_loaded')}"
+                f"  {color}{marker}{reset}  {ep:<{col_w}}  "
+                f"/health={health}  loaded={loaded}  running={running:.0f}"
             )
             if not ok:
                 unhealthy += 1

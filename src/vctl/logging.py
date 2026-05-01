@@ -65,7 +65,12 @@ class PrettyFormatter(logging.Formatter):
 
 
 def configure(level: str = "info", fmt: Literal["pretty", "json"] = "pretty") -> None:
-    """Reconfigure root logger; idempotent."""
+    """Reconfigure root logger; idempotent.
+
+    Also silences chatty third-party loggers (httpx, httpcore) at INFO —
+    they emit one line per request which floods commands like `lb health`.
+    Pass `--log-level debug` to see them.
+    """
     root = logging.getLogger()
     for h in list(root.handlers):
         root.removeHandler(h)
@@ -73,3 +78,9 @@ def configure(level: str = "info", fmt: Literal["pretty", "json"] = "pretty") ->
     handler.setFormatter(JsonFormatter() if fmt == "json" else PrettyFormatter())
     root.addHandler(handler)
     root.setLevel(level.upper())
+
+    # Silence chatty third-party loggers unless user explicitly asked for debug.
+    user_level = logging.getLevelName(level.upper())
+    if not isinstance(user_level, int) or user_level > logging.DEBUG:
+        for noisy in ("httpx", "httpcore", "urllib3"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
