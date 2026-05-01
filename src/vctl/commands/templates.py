@@ -13,7 +13,6 @@ CLUSTER_TEMPLATE = """\
 #
 # Env overrides: VCTL_<SECTION>__<FIELD>=value (double-underscore = nested)
 #   e.g. VCTL_LB__HOST=10.0.0.42
-#        VCTL_LB__CLIENT__BIND_PORT=8000
 #        VCTL_PROFILE=qwen3_5-9b  (or MODEL_PROFILE — alias)
 
 apiVersion: vctl/v1
@@ -44,10 +43,6 @@ lb:
   # IP of the pod that runs haproxy. `vctl lb start` refuses unless
   # this pod's detected IP matches (override with --force).
   host: 10.119.30.181
-
-  # Client-facing listener (what your app/curl hits).
-  client:
-    bind_port: 8080
 
   # Admin runtime API socket (TCP). Used by `vctl lb add/remove/drain` etc.
   # to talk to a remote haproxy without ssh.
@@ -89,6 +84,17 @@ lb:
     timeout_client: 1h
     # Server response timeout — same.
     timeout_server: 1h
+
+  pools:
+    # One entry per served model. Each pool is its own HAProxy frontend
+    # listening on a distinct port. Backends auto-route into the pool
+    # whose served_model matches the model they actually load.
+    - name: qwen3-5-9b
+      served_model: Qwen/Qwen3.5-9B
+      bind_port: 8080
+    - name: qwen3-vl-30b
+      served_model: Qwen/Qwen3-VL-30B-A3B-Thinking
+      bind_port: 8081
 """
 
 QWEN3_5_9B_PROFILE = """\
