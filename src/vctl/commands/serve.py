@@ -17,6 +17,7 @@ import psutil
 
 from vctl.commands import lb_scaling
 from vctl.lb.manager import LbManager
+from vctl.lb.routing import pool_for_model
 from vctl.lb.state import BackendState
 from vctl.platform import detect_self_ip
 from vctl.resolver import resolve
@@ -33,10 +34,15 @@ def _build_subparser() -> argparse.ArgumentParser:
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     _build_subparser().parse_args(argv_rest)
     rc = resolve(ns.config, profile=ns.profile)
+
+    # FAIL-FAST POOL ROUTING — before preflight, before subprocess.
+    # If the cluster has no pool serving this profile's model, exit 3
+    # immediately (don't waste a multi-minute model load).
     state_dir = Path(rc.cluster.state_dir)
     run_dir = Path.home() / ".vctl" / "lb"
     mgr = LbManager(rc.lb, state_dir=state_dir, run_dir=run_dir)
-    bs = BackendState(state_dir, rc.lb.host)
+    pool = pool_for_model(rc.lb, rc.model.name)
+    bs = BackendState(state_dir, rc.lb.host, pool=pool.name)
 
     env = os.environ.copy()
     venv_bin = str(Path(rc.cluster.venv) / "bin")
@@ -77,12 +83,12 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         if state["attached"]:
             _LOG.info("signal %d received; draining + detaching", signum)
             try:
-                lb_scaling._do_drain(ep, mgr)
+                lb_scaling._do_drain(ep, mgr, pool_name=pool.name)
                 _wait_for_idle(
                     rc.server.http_port,
                     timeout=float(os.environ.get("LB_DETACH_WAIT", "30")),
                 )
-                lb_scaling._do_remove(ep, mgr, bs)
+                lb_scaling._do_remove(ep, mgr, bs, pool_name=pool.name)
             finally:
                 grace = float(os.environ.get("VCTL_KILL_GRACE", "30"))
                 _kill_tree(proc.pid, grace=grace)
@@ -104,7 +110,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         _kill_tree(proc.pid)
         return 1
 
-    lb_scaling._do_add(ep, mgr, bs)
+    lb_scaling._do_add(ep, mgr, bs, pool_name=pool.name)
     state["attached"] = True
     # Poll with a short timeout so Python signal handlers can fire between iterations.
     while True:

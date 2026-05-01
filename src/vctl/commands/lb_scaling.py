@@ -11,6 +11,7 @@ import time
 
 from vctl.lb.manager import LbManager
 from vctl.lb.probe import probe_local_vllm
+from vctl.lb.routing import pool_for_endpoint
 from vctl.lb.runtime import RuntimeClient
 from vctl.lb.state import BackendState
 from vctl.platform import detect_self_ip
@@ -56,24 +57,50 @@ def dispatch(
     return 2
 
 
-def _do_add(ep: str, mgr: LbManager, bs: BackendState) -> int:
+def _resolve_pool_name(mgr: LbManager, requested: str | None) -> str:
+    """Validate/default the pool name against the LB config.
+
+    - If *requested* is given and exists → return it.
+    - If *requested* is given but unknown → stderr + exit 3.
+    - If *requested* is None and there is exactly one pool → use it.
+    - If *requested* is None and there are multiple pools → raise ValueError
+      (the caller must specify a pool; serve.py always passes pool_name).
+    """
+    if requested:
+        if requested not in {p.name for p in mgr.lb.pools}:
+            print(
+                f"unknown pool {requested!r}; available: {[p.name for p in mgr.lb.pools]}",
+                file=sys.stderr,
+            )
+            sys.exit(3)
+        return requested
+    if len(mgr.lb.pools) == 1:
+        return mgr.lb.pools[0].name
+    raise ValueError("multiple pools configured; pool_name required")
+
+
+def _do_add(ep: str, mgr: LbManager, bs: BackendState, pool_name: str | None = None) -> int:
+    pool_name = _resolve_pool_name(mgr, pool_name)
+    backend_section = f"pool_{pool_name}"
     state_result = bs.add(ep)
     cli = _client(mgr)
     if cli is not None:
         try:
-            cli.add_server("pool", _name_for(ep), ep)
+            cli.add_server(backend_section, _name_for(ep), ep)
         except Exception as e:
             _LOG.error("admin socket add_server failed: %s", e)
         # Force ready: clears any lingering drain/maint from a previous
         # session that crashed mid-detach. Idempotent.
         with contextlib.suppress(Exception):
-            cli.set_state("pool", _name_for(ep), "ready")
+            cli.set_state(backend_section, _name_for(ep), "ready")
     label = "(new)" if state_result == "new" else "(already present)"
-    print(f"add {ep} {label}", file=sys.stderr)
+    print(f"add {ep} {label} (pool: {pool_name})", file=sys.stderr)
     return 0
 
 
-def _do_remove(ep: str, mgr: LbManager, bs: BackendState) -> int:
+def _do_remove(ep: str, mgr: LbManager, bs: BackendState, pool_name: str | None = None) -> int:
+    pool_name = _resolve_pool_name(mgr, pool_name)
+    backend_section = f"pool_{pool_name}"
     bs.remove(ep)
     cli = _client(mgr)
     if cli is not None:
@@ -81,54 +108,75 @@ def _do_remove(ep: str, mgr: LbManager, bs: BackendState) -> int:
         # Set maint first (idempotent), then del. Both errors swallowed —
         # state file is always updated.
         with contextlib.suppress(Exception):
-            cli.set_state("pool", _name_for(ep), "maint")
+            cli.set_state(backend_section, _name_for(ep), "maint")
         with contextlib.suppress(Exception):
-            cli.remove_server("pool", _name_for(ep))
+            cli.remove_server(backend_section, _name_for(ep))
     return 0
 
 
-def _do_drain(ep: str, mgr: LbManager) -> int:
+def _do_drain(ep: str, mgr: LbManager, pool_name: str | None = None) -> int:
+    pool_name = _resolve_pool_name(mgr, pool_name)
+    backend_section = f"pool_{pool_name}"
     cli = _client(mgr)
     if cli is not None:
-        cli.set_state("pool", _name_for(ep), "drain")
+        cli.set_state(backend_section, _name_for(ep), "drain")
     return 0
 
 
 def _do_attach(port: int, mgr: LbManager, bs: BackendState) -> int:
+    self_ip = detect_self_ip()
+    ep = f"{self_ip}:{port}"
+    pool = pool_for_endpoint(mgr.lb, ep)
     probe = probe_local_vllm(port)
     if not probe.get("models_loaded"):
         print(f"refusing to attach: localhost:{port} model not loaded", file=sys.stderr)
         return 1
-    self_ip = detect_self_ip()
-    return _do_add(f"{self_ip}:{port}", mgr, bs)
+    bs_pool = BackendState(bs.state_dir, bs.lb_host, pool=pool.name)
+    return _do_add(ep, mgr, bs_pool, pool_name=pool.name)
 
 
 def _do_detach(mgr: LbManager, bs: BackendState) -> int:
     self_ip = detect_self_ip()
-    matching = [ep for ep in bs.list() if ep.startswith(f"{self_ip}:")]
-    if not matching:
-        return 0
-    ep = matching[0]
-    cli = _client(mgr)
-    if cli is not None:
-        cli.set_state("pool", _name_for(ep), "drain")
-    timeout = float(os.environ.get("LB_DETACH_WAIT", "30"))
-    deadline = time.monotonic() + timeout
-    port = int(ep.rsplit(":", 1)[1])
-    while time.monotonic() < deadline:
-        probe = probe_local_vllm(port)
-        if probe.get("num_requests_running", 0.0) <= 0.0:
-            break
-        time.sleep(1)
-    return _do_remove(ep, mgr, bs)
+    # Scan all known pools for an endpoint matching this host.
+    pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
+    if not pool_names:
+        # Fall back to pools in LB config.
+        pool_names = [p.name for p in mgr.lb.pools]
+    for pname in pool_names:
+        pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
+        matching = [ep for ep in pbs.list() if ep.startswith(f"{self_ip}:")]
+        if not matching:
+            continue
+        ep = matching[0]
+        cli = _client(mgr)
+        backend_section = f"pool_{pname}"
+        if cli is not None:
+            cli.set_state(backend_section, _name_for(ep), "drain")
+        timeout = float(os.environ.get("LB_DETACH_WAIT", "30"))
+        deadline = time.monotonic() + timeout
+        port = int(ep.rsplit(":", 1)[1])
+        while time.monotonic() < deadline:
+            probe = probe_local_vllm(port)
+            if probe.get("num_requests_running", 0.0) <= 0.0:
+                break
+            time.sleep(1)
+        return _do_remove(ep, mgr, pbs, pool_name=pname)
+    return 0
 
 
 def _do_auto_add(mgr: LbManager, bs: BackendState) -> int:
     cli = _client(mgr)
-    for ep in bs.list():
-        if cli is not None:
-            with contextlib.suppress(Exception):
-                cli.add_server("pool", _name_for(ep), ep)
+    # Scan all known pools.
+    pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
+    if not pool_names:
+        pool_names = [p.name for p in mgr.lb.pools]
+    for pname in pool_names:
+        pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
+        backend_section = f"pool_{pname}"
+        for ep in pbs.list():
+            if cli is not None:
+                with contextlib.suppress(Exception):
+                    cli.add_server(backend_section, _name_for(ep), ep)
     return 0
 
 
