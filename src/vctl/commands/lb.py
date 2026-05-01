@@ -16,9 +16,33 @@ from vctl.resolver import resolve
 _LOG = logging.getLogger(__name__)
 
 
+_LB_VERB_HELP: dict[str, str] = {
+    "install": "Install haproxy (conda → source-build fallback)",
+    "start": "Start haproxy in tmux session vctl-lb",
+    "stop": "SIGTERM haproxy (via pidfile) + tear down tmux session",
+    "status": "Process + admin-socket + tmux state",
+    "is-host": "Exit 0 if this pod's IP == lb.host, else exit 1",
+    "where": "Print lb.host:bind_port",
+    "list": "List backends per pool from the state file",
+    "wait-ready": "Block until ≥N ready in every non-empty pool (and LB front 200)",
+    "stats": "Print stats dashboard URL",
+    "logs": "Print contents of haproxy.log",
+    "config": "Print rendered haproxy.cfg",
+    "reload": "Re-render config + haproxy -sf <pid> (graceful, zero-downtime)",
+    "auto-add": "Re-register every backend from the state file (post-restart recovery)",
+    "add": "Register an endpoint in a pool (idempotent; auto-routes on multi-pool)",
+    "remove": "Drop an endpoint from its pool (set maint then del)",
+    "drain": "Mark backend as drain (no new traffic, finish in-flight)",
+    "attach": "Probe localhost:<port>/v1/models then add self to its pool",
+    "detach": "Drain self, wait for in-flight to drain, remove",
+    "health": "Probe each registered backend; exit non-zero on any unhealthy",
+}
+
+
 def _build_subparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="vctl lb")
-    sp = p.add_subparsers(dest="verb", required=True)
+    p = argparse.ArgumentParser(prog="vctl lb", description="LB lifecycle + scaling control.")
+    sp = p.add_subparsers(dest="verb", required=True, metavar="VERB")
+    # Verbs with no extra args.
     for verb in (
         "install",
         "stop",
@@ -30,27 +54,31 @@ def _build_subparser() -> argparse.ArgumentParser:
         "logs",
         "config",
         "reload",
+        "auto-add",
+        "detach",
+        "health",
     ):
-        sp.add_parser(verb)
-    sp.add_parser("start").add_argument("--force", action="store_true")
-    wr = sp.add_parser("wait-ready")
-    wr.add_argument("count", type=int, nargs="?", default=1)
+        sp.add_parser(verb, help=_LB_VERB_HELP[verb])
+    # Verbs with args / flags.
+    start = sp.add_parser("start", help=_LB_VERB_HELP["start"])
+    start.add_argument("--force", action="store_true",
+                       help="start even if this pod's IP != lb.host")
+    wr = sp.add_parser("wait-ready", help=_LB_VERB_HELP["wait-ready"])
+    wr.add_argument("count", type=int, nargs="?", default=1,
+                    help="minimum ready backends per non-empty pool (default: 1)")
     wr.add_argument("--pool", default=None, help="scope to a single pool")
-    sp.add_parser("auto-add")
-    add = sp.add_parser("add")
-    add.add_argument("endpoint")
-    add.add_argument(
-        "--pool", default=None, help="explicit pool name (default: auto by /v1/models probe)"
-    )
-    rm = sp.add_parser("remove")
-    rm.add_argument("endpoint")
-    dr = sp.add_parser("drain")
-    dr.add_argument("endpoint")
+    add = sp.add_parser("add", help=_LB_VERB_HELP["add"])
+    add.add_argument("endpoint", help="ip:port to add")
+    add.add_argument("--pool", default=None,
+                     help="explicit pool name (default: auto by /v1/models probe)")
+    rm = sp.add_parser("remove", help=_LB_VERB_HELP["remove"])
+    rm.add_argument("endpoint", help="ip:port to remove")
+    dr = sp.add_parser("drain", help=_LB_VERB_HELP["drain"])
+    dr.add_argument("endpoint", help="ip:port to drain")
     dr.add_argument("--pool", default=None, help="explicit pool name")
-    at = sp.add_parser("attach")
-    at.add_argument("port", type=int, nargs="?")
-    sp.add_parser("detach")
-    sp.add_parser("health")
+    at = sp.add_parser("attach", help=_LB_VERB_HELP["attach"])
+    at.add_argument("port", type=int, nargs="?",
+                    help="local vllm port to probe (default: 8000)")
     return p
 
 
