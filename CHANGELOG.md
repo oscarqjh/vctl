@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.6] - 2026-05-02
+
+### Fixed
+- **`fetch_vllm_metrics` undercount with data parallelism:** with
+  `--data-parallel-size N`, vLLM emits one Prometheus line per dp engine
+  (e.g. `vllm:num_requests_running{engine="0"} 2`). The previous parser
+  was last-wins so it reported a single engine's value instead of the
+  per-backend total. Now sums across all engine labels — `running` /
+  `waiting` columns in `lb info` reflect actual in-flight count for the
+  whole vLLM process.
+
 ## [0.2.5] - 2026-05-02
 
 ### Fixed

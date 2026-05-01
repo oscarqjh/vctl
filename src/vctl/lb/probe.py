@@ -89,6 +89,11 @@ def fetch_vllm_metrics(host: str, port: int, timeout: float = 2.0) -> VllmMetric
     strips optional ``{labels}`` between the metric name and the value,
     then takes the last whitespace-delimited token as a float cast to int.
     Ignores ``# HELP`` / ``# TYPE`` comment lines.
+
+    With ``--data-parallel-size N``, vLLM emits ONE line per dp engine
+    (e.g. ``vllm:num_requests_running{engine="0"} 2``). We sum across all
+    engine labels so the displayed value matches the actual per-backend
+    in-flight count (NOT one engine's slice).
     """
     result: VllmMetrics = {"running": None, "waiting": None}
     try:
@@ -98,6 +103,11 @@ def fetch_vllm_metrics(host: str, port: int, timeout: float = 2.0) -> VllmMetric
             text = resp.text
     except Exception:
         return result
+
+    running_sum = 0
+    waiting_sum = 0
+    saw_running = False
+    saw_waiting = False
 
     for line in text.splitlines():
         if not line or line.startswith("#"):
@@ -113,8 +123,14 @@ def fetch_vllm_metrics(host: str, port: int, timeout: float = 2.0) -> VllmMetric
         except (ValueError, IndexError):
             continue
         if name == "vllm:num_requests_running":
-            result["running"] = val
+            running_sum += val
+            saw_running = True
         elif name == "vllm:num_requests_waiting":
-            result["waiting"] = val
+            waiting_sum += val
+            saw_waiting = True
 
+    if saw_running:
+        result["running"] = running_sum
+    if saw_waiting:
+        result["waiting"] = waiting_sum
     return result
