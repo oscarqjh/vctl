@@ -56,6 +56,31 @@ class LbManager:
         _LOG.info("haproxy started in tmux session %s", _TMUX_NAME)
 
     def stop(self) -> None:
+        """Stop haproxy reliably.
+
+        HAProxy daemonizes by default — `tmux_kill` alone doesn't reach the
+        long-running process (it's session-detached from tmux). Use the
+        pidfile to send SIGTERM directly, then clean up the tmux session
+        (and pidfile) too.
+        """
+        import os
+        import signal
+
+        # 1. SIGTERM the haproxy pid if pidfile is good.
+        if self.pid_path.exists():
+            try:
+                raw = self.pid_path.read_text().strip()
+                if raw:
+                    pid = int(raw.split()[0])
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.kill(pid, signal.SIGTERM)
+                        _LOG.info("sent SIGTERM to haproxy pid=%d", pid)
+            except (ValueError, OSError) as e:
+                _LOG.warning("could not read pidfile %s: %s", self.pid_path, e)
+            with contextlib.suppress(OSError):
+                self.pid_path.unlink()
+
+        # 2. Tear down the tmux session if it exists (idempotent).
         tmux_kill(_TMUX_NAME)
 
     def reload(self) -> None:
