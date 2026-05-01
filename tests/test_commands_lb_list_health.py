@@ -1,8 +1,10 @@
-"""Tests for lb list/health/wait-ready per-pool grouping (Task 8 v0.2)."""
+"""Tests for lb health/wait-ready per-pool grouping.
+
+F6 annotation tests ported to _do_info (lb list removed in v0.2.4).
+"""
 
 from __future__ import annotations
 
-import io
 import os
 import subprocess
 import sys
@@ -56,58 +58,6 @@ def _make_two_pool_repo(tmp_path: Path) -> Path:
             f"server: {{ http_port: 8000 }}\nvllm_args: {{}}\nenv: {{}}\n"
         )
     return tmp_path
-
-
-# ---------------------------------------------------------------------------
-# lb list — grouped by pool
-# ---------------------------------------------------------------------------
-
-
-def test_lb_list_groups_by_pool(tmp_path: Path) -> None:
-    repo = _make_two_pool_repo(tmp_path)
-    state = tmp_path / "state"
-    state.mkdir()
-    BackendState(state, "10.0.0.1", pool="a").add("10.0.0.5:8000")
-    BackendState(state, "10.0.0.1", pool="b").add("10.0.0.7:8000")
-    proc = _vctl(
-        "lb",
-        "list",
-        cwd=repo,
-        env={
-            **os.environ,
-            "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
-            "VCTL_CLUSTER__STATE_DIR": str(state),
-        },
-    )
-    assert proc.returncode == 0
-    out = proc.stdout
-    assert "pool: a" in out
-    assert "pool: b" in out
-    assert "10.0.0.5:8000" in out
-    assert "10.0.0.7:8000" in out
-
-
-def test_lb_list_empty_pools(tmp_path: Path) -> None:
-    """No registered backends → exit 0, show (no backends) placeholder."""
-    repo = _make_two_pool_repo(tmp_path)
-    state = tmp_path / "state"
-    state.mkdir()
-    proc = _vctl(
-        "lb",
-        "list",
-        cwd=repo,
-        env={
-            **os.environ,
-            "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
-            "VCTL_CLUSTER__STATE_DIR": str(state),
-        },
-    )
-    assert proc.returncode == 0
-    out = proc.stdout
-    # Each pool still shown
-    assert "pool: a" in out
-    assert "pool: b" in out
-    assert "(no backends)" in out
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +162,7 @@ def test_lb_wait_ready_no_backends_times_out(tmp_path: Path) -> None:
 
 
 def _make_f6_mgr(tmp_path: Path) -> tuple[LbManager, BackendState]:
-    """Single-pool LbManager for F6 unit tests."""
+    """Single-pool LbManager for F6 / lb info unit tests."""
     lb = LbHaproxy(
         host="10.0.0.1",
         admin=LbAdmin(bind_port=9001),
@@ -230,40 +180,53 @@ def _make_f6_mgr(tmp_path: Path) -> tuple[LbManager, BackendState]:
     return mgr, bs
 
 
-def _capture_do_list(
+def _capture_do_info(
     mgr: LbManager, bs: BackendState, monkeypatch: pytest.MonkeyPatch, **kwargs: Any
 ) -> tuple[int, str]:
-    """Run _do_list and capture its stdout; return (rc, captured_text)."""
+    """Run _do_info and capture its output (rich Console); return (rc, captured_text)."""
+    import io
+
+    from rich.console import Console
+
     buf = io.StringIO()
-    monkeypatch.setattr("sys.stdout", buf)
-    rc = lb_cmd._do_list(mgr, bs)
+    fake_console = Console(file=buf, force_terminal=False)
+    rc = lb_cmd._do_info(mgr, bs, _console=fake_console)
     return rc, buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
-# F6 tests
+# F6 tests (ported from lb list → lb info)
 # ---------------------------------------------------------------------------
 
 
-def test_list_marks_live_endpoints(
+def test_info_marks_live_endpoints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F6: state file has 2 endpoints; admin socket reports both → ✓ live."""
+    """F6 (info): state file has 2 endpoints; admin socket reports both → ✓ live."""
     mgr, bs = _make_f6_mgr(tmp_path)
     bs.add("10.1.2.5:8000")
     bs.add("10.1.2.6:8000")
 
     # LB is running.
-    monkeypatch.setattr(mgr, "status", lambda: {"running": True})
+    monkeypatch.setattr(mgr, "status", lambda: {
+        "running": True, "pid": 1, "pid_alive": True, "admin_reachable": True,
+        "tmux_managed": True, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
+        "is_local_host": True,
+    })
 
     # Fake live registry: both endpoints present in haproxy.
     registry = {"pool_default": {"10.1.2.5:8000", "10.1.2.6:8000"}}
     monkeypatch.setattr(lb_cmd, "_build_live_registry", lambda cli: registry)
+    monkeypatch.setattr(lb_cmd, "_fetch_haproxy_stats", lambda cli: {})
 
     fake_cli = MagicMock()
     monkeypatch.setattr(lb_scaling, "_client", lambda m: fake_cli)
 
-    rc, out = _capture_do_list(mgr, bs, monkeypatch)
+    # Also mock fetch_vllm_metrics to avoid network calls.
+    _no_metrics = {"running": None, "waiting": None}
+    monkeypatch.setattr("vctl.lb.probe.fetch_vllm_metrics", lambda h, p, **kw: _no_metrics)
+
+    rc, out = _capture_do_info(mgr, bs, monkeypatch)
 
     assert rc == 0
     assert "10.1.2.5:8000" in out
@@ -273,23 +236,31 @@ def test_list_marks_live_endpoints(
     assert "untracked" not in out
 
 
-def test_list_marks_tracked_only(
+def test_info_marks_tracked_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F6: state file has endpoint A; admin socket reports nothing → ⚠ tracked-only."""
+    """F6 (info): state file has endpoint A; admin socket reports nothing → ⚠ tracked-only."""
     mgr, bs = _make_f6_mgr(tmp_path)
     bs.add("10.1.2.5:8000")
 
-    monkeypatch.setattr(mgr, "status", lambda: {"running": True})
+    monkeypatch.setattr(mgr, "status", lambda: {
+        "running": True, "pid": 1, "pid_alive": True, "admin_reachable": True,
+        "tmux_managed": True, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
+        "is_local_host": True,
+    })
 
     # Live registry is empty — endpoint not in haproxy.
     registry: dict[str, set[str]] = {}
     monkeypatch.setattr(lb_cmd, "_build_live_registry", lambda cli: registry)
+    monkeypatch.setattr(lb_cmd, "_fetch_haproxy_stats", lambda cli: {})
 
     fake_cli = MagicMock()
     monkeypatch.setattr(lb_scaling, "_client", lambda m: fake_cli)
 
-    rc, out = _capture_do_list(mgr, bs, monkeypatch)
+    _no_metrics = {"running": None, "waiting": None}
+    monkeypatch.setattr("vctl.lb.probe.fetch_vllm_metrics", lambda h, p, **kw: _no_metrics)
+
+    rc, out = _capture_do_info(mgr, bs, monkeypatch)
 
     assert rc == 0
     assert "10.1.2.5:8000" in out
@@ -298,67 +269,84 @@ def test_list_marks_tracked_only(
     assert "✓ live" not in out
 
 
-def test_list_marks_untracked_drift(
+def test_info_marks_untracked_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F6: state file empty; admin socket reports endpoint B → ⚠ untracked."""
+    """F6 (info): state file empty; admin socket reports endpoint B → ⚠ untracked."""
     mgr, bs = _make_f6_mgr(tmp_path)
     # No entries in state file.
 
-    monkeypatch.setattr(mgr, "status", lambda: {"running": True})
+    monkeypatch.setattr(mgr, "status", lambda: {
+        "running": True, "pid": 1, "pid_alive": True, "admin_reachable": True,
+        "tmux_managed": True, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
+        "is_local_host": True,
+    })
 
     # Live registry has an endpoint not in state file.
     registry = {"pool_default": {"10.1.2.7:8000"}}
     monkeypatch.setattr(lb_cmd, "_build_live_registry", lambda cli: registry)
+    monkeypatch.setattr(lb_cmd, "_fetch_haproxy_stats", lambda cli: {})
 
     fake_cli = MagicMock()
     monkeypatch.setattr(lb_scaling, "_client", lambda m: fake_cli)
 
-    rc, out = _capture_do_list(mgr, bs, monkeypatch)
+    _no_metrics = {"running": None, "waiting": None}
+    monkeypatch.setattr("vctl.lb.probe.fetch_vllm_metrics", lambda h, p, **kw: _no_metrics)
+
+    rc, out = _capture_do_info(mgr, bs, monkeypatch)
 
     assert rc == 0
     assert "10.1.2.7:8000" in out
     assert "untracked" in out
     assert "⚠" in out
-    # Adoption hint present.
-    assert "vctl lb add 10.1.2.7:8000" in out
 
 
-def test_list_admin_unreachable_falls_back(
+def test_info_admin_unreachable_falls_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F6: _client → None → WARNING line, no crash, returns 0."""
+    """F6 (info): _client → None → WARNING line, no crash, returns 0."""
     mgr, bs = _make_f6_mgr(tmp_path)
     bs.add("10.1.2.5:8000")
 
-    monkeypatch.setattr(mgr, "status", lambda: {"running": True})
+    monkeypatch.setattr(mgr, "status", lambda: {
+        "running": True, "pid": 1, "pid_alive": True, "admin_reachable": True,
+        "tmux_managed": True, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
+        "is_local_host": True,
+    })
     # Admin socket unreachable.
     monkeypatch.setattr(lb_scaling, "_client", lambda m: None)
 
-    rc, out = _capture_do_list(mgr, bs, monkeypatch)
+    _no_metrics = {"running": None, "waiting": None}
+    monkeypatch.setattr("vctl.lb.probe.fetch_vllm_metrics", lambda h, p, **kw: _no_metrics)
+
+    rc, out = _capture_do_info(mgr, bs, monkeypatch)
 
     assert rc == 0
     assert "WARNING" in out
     assert "10.1.2.5:8000" in out
 
 
-def test_list_lb_stopped_skips_live_query(
+def test_info_lb_stopped_skips_live_query(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F6: LB stopped → [LB STOPPED] banner, no admin socket call attempted."""
+    """F6 (info): LB stopped → [LB STOPPED] banner, no admin socket call attempted."""
     mgr, bs = _make_f6_mgr(tmp_path)
     bs.add("10.1.2.5:8000")
 
-    monkeypatch.setattr(mgr, "status", lambda: {"running": False})
+    monkeypatch.setattr(mgr, "status", lambda: {
+        "running": False, "pid": None, "pid_alive": False, "admin_reachable": False,
+        "tmux_managed": False, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
+        "is_local_host": True,
+    })
 
     # Spy on _client — must not be called when LB is stopped.
     spy = MagicMock(return_value=None)
     monkeypatch.setattr(lb_scaling, "_client", spy)
 
-    rc, out = _capture_do_list(mgr, bs, monkeypatch)
+    rc, out = _capture_do_info(mgr, bs, monkeypatch)
 
     assert rc == 0
-    assert "[LB STOPPED]" in out
+    assert "LB STOPPED" in out
     assert "10.1.2.5:8000" in out
     # _client must NOT have been called.
     spy.assert_not_called()

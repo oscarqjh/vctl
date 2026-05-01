@@ -8,10 +8,14 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from vctl.lb.manager import LbManager
 from vctl.lb.state import BackendState
 from vctl.resolver import resolve
+
+if TYPE_CHECKING:
+    from rich.console import Console
 
 _LOG = logging.getLogger(__name__)
 
@@ -20,12 +24,10 @@ _LB_VERB_HELP: dict[str, str] = {
     "install": "Install haproxy (conda → source-build fallback)",
     "start": "Start haproxy in tmux session vctl-lb",
     "stop": "SIGTERM haproxy (via pidfile) + tear down tmux session",
-    "status": "Process + admin-socket + tmux state",
+    "info": "Unified dashboard: process status + per-pool scur/qcur/running/waiting",
     "is-host": "Exit 0 if this pod's IP == lb.host, else exit 1",
     "where": "Print lb.host:bind_port",
-    "list": "List backends per pool from the state file",
     "wait-ready": "Block until ≥N ready in every non-empty pool (and LB front 200)",
-    "stats": "Print stats dashboard URL",
     "logs": "Print contents of haproxy.log",
     "config": "Print rendered haproxy.cfg",
     "reload": "Re-render config + haproxy -sf <pid> (graceful, zero-downtime)",
@@ -46,10 +48,8 @@ def _build_subparser() -> argparse.ArgumentParser:
     for verb in (
         "install",
         "stop",
-        "status",
+        "info",
         "is-host",
-        "list",
-        "stats",
         "logs",
         "config",
         "reload",
@@ -142,36 +142,17 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     if verb == "stop":
         mgr.stop()
         return 0
-    if verb == "status":
-        st = mgr.status()
-        if st.get("is_local_host"):
-            for k, v in st.items():
-                print(f"{k}: {v}")
-        else:
-            # F4: running on a worker pod — remote LB; pid/tmux are local-only
-            host = mgr.lb.host
-            admin_port = mgr.lb.admin.bind_port
-            admin_reachable = st.get("admin_reachable", False)
-            print(f"remote LB at {host}:{admin_port} — admin_reachable={admin_reachable}")
-            print(
-                "# pidfile/tmux are local-only; "
-                "status only checks reachability from this host"
-            )
-        return 0
+    if verb == "info":
+        return _do_info(mgr, bs)
     if verb == "reload":
         mgr.reload()
         return 0
-    if verb == "list":
-        return _do_list(mgr, bs)
     if verb == "wait-ready":
         return _wait_ready(mgr, parsed.count, pool_filter=parsed.pool)
     if verb == "install":
         from vctl.lb.installer import ensure_haproxy
 
         print(ensure_haproxy())
-        return 0
-    if verb == "stats":
-        print(f"http://{mgr.lb.host}:{mgr.lb.stats.bind_port}")
         return 0
     if verb == "logs":
         log_path = mgr.run_dir / "haproxy.log"
@@ -184,115 +165,289 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     return lb_scaling.dispatch(verb, parsed, ns, mgr, bs)
 
 
-def _do_list(mgr: LbManager, bs: BackendState) -> int:
-    """F6: lb list with live-registration annotation.
+def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) -> int:
+    """Unified dashboard: LB process panel + per-pool table with scur/qcur/running/waiting.
 
-    When LB is up, cross-references state file against haproxy admin socket
-    and marks each endpoint as:
-      ✓ live          — in state file AND registered in haproxy
-      ⚠ tracked-only  — in state file, not in haproxy (auto-add will fix)
-      ⚠ untracked     — in haproxy, not in state file (lb add adopts it)
-
-    When LB is stopped, keeps the existing [LB STOPPED] banner and skips
-    the admin socket query entirely.  Admin socket errors degrade gracefully.
-    Exit code is always 0 (informational, not a check command).
+    Always exits 0 (informational). Use `lb health` for scripting gate.
+    ``_console`` is an optional injection point for testing (pass a ``rich.Console``).
     """
+    from rich.box import MINIMAL_DOUBLE_HEAD
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
     from vctl.commands.lb_scaling import _client
+    from vctl.lb.probe import fetch_vllm_metrics
 
-    pools = mgr.lb.pools
+    console: Console = _console if _console is not None else Console(force_terminal=False)
 
-    # Detect LB liveness so we can annotate state-file content correctly.
-    # When LB is up: state file == live haproxy pool (per add/remove sync).
-    # When LB is down: state file is the persistent registry for the
-    # next `lb start` + `auto-add`. Backends shown are NOT actually
-    # serving traffic. Annotate to avoid confusion.
+    # ------------------------------------------------------------------
+    # 1. LB process panel
+    # ------------------------------------------------------------------
     st = mgr.status()
     lb_running = bool(st.get("running"))
-    if not lb_running:
-        print(
-            "WARNING: LB is not running. The entries below are persisted "
-            "registrations from the state file — they are NOT serving "
-            "traffic right now. Run `vctl lb start` to bring them back."
-        )
-        print()
+    pid = st.get("pid")
+    pid_alive = st.get("pid_alive", False)
+    admin_reachable = st.get("admin_reachable", False)
+    admin_bind = st.get("admin_bind", "?")
+    cfg_path = st.get("cfg_path", "?")
+    is_local_host = st.get("is_local_host", False)
+    stats_url = f"http://{mgr.lb.host}:{mgr.lb.stats.bind_port}"
 
-    # F6: Build live-registry map from haproxy admin socket (only when LB up).
-    # Mapping: pool_name -> set of "ip:port" strings actually in haproxy.
-    live_registry: dict[str, set[str]] | None = None
-    live_query_failed = False
+    admin_status = "(reachable)" if admin_reachable else "(unreachable)"
+    proc_lines = [
+        f"pid {pid}  alive={str(pid_alive).lower()}  "
+        f"admin={admin_bind} {admin_status}",
+        f"tmux: {mgr.tmux_name}  is_local_host={str(is_local_host).lower()}",
+        f"cfg: {cfg_path}",
+        f"stats UI: {stats_url}",
+    ]
+    if not lb_running:
+        proc_lines.append("[bold red][LB STOPPED][/bold red]")
+    console.print(Panel("\n".join(proc_lines), title="LB Process", expand=False))
+
+    # ------------------------------------------------------------------
+    # 2. Build live HAProxy stats (scur, qcur, lastchg) if LB is running.
+    # ------------------------------------------------------------------
+    # haproxy_stats: backend_section -> server_name -> {scur/qcur/lastchg: int, ep: str}
+    haproxy_stats: dict[str, dict[str, dict[str, int | str]]] = {}
+    live_registry: dict[str, set[str]] | None = None  # backend_section -> set[ep]
+    admin_query_failed = False
+
     if lb_running:
         cli = _client(mgr)
         if cli is None:
-            live_query_failed = True
+            admin_query_failed = True
         else:
             try:
+                haproxy_stats = _fetch_haproxy_stats(cli)
                 live_registry = _build_live_registry(cli)
             except Exception as exc:
-                _LOG.debug("_build_live_registry raised: %s", exc)
-                live_query_failed = True
+                _LOG.debug("haproxy stats query raised: %s", exc)
+                admin_query_failed = True
 
-    if live_query_failed:
-        print("WARNING: could not query live haproxy state — showing state-file entries only")
-        print()
+    if admin_query_failed:
+        console.print(
+            "[yellow]WARNING: could not query live haproxy state "
+            "— showing state-file entries only[/yellow]"
+        )
 
-    found_any = False
-    for pool in pools:
+    # ------------------------------------------------------------------
+    # 3. Per-pool tables
+    # ------------------------------------------------------------------
+    any_drift = False
+
+    for pool in mgr.lb.pools:
         pbs = BackendState(bs.state_dir, bs.lb_host, pool=pool.name)
         eps = pbs.list()
         url = f"http://{mgr.lb.host}:{pool.bind_port}"
-        suffix = "" if lb_running else "  [LB STOPPED]"
-        print(f"pool: {pool.name} ({pool.served_model}) — {url}{suffix}")
+        header = f"pool: {pool.name} → {url}   ({pool.served_model})"
+        if not lb_running:
+            header += "  [LB STOPPED]"
+        console.print(f"\n[bold]{header}[/bold]")
 
         if not lb_running:
-            # LB stopped — plain listing, no live annotation.
+            # Simple listing when LB is stopped — no admin queries.
             if eps:
+                table = Table(box=MINIMAL_DOUBLE_HEAD, show_header=True, pad_edge=False)
+                table.add_column("Endpoint", overflow="fold")
+                table.add_column("Status")
                 for ep in eps:
-                    print(f"  {ep}")
-                found_any = True
+                    table.add_row(ep, "[LB STOPPED]")
+                console.print(table)
             else:
-                print("  (no backends)")
+                console.print("  (no backends)")
             continue
 
-        # LB is running — annotate with live status.
+        # Build per-backend data.
         backend_section = f"pool_{pool.name}"
         live_eps: set[str] = set()
         if live_registry is not None:
             live_eps = live_registry.get(backend_section, set())
-
         state_set = set(eps)
 
-        if live_query_failed:
-            # Can't distinguish live vs tracked-only — show all as tracked-only.
-            if eps:
-                for ep in eps:
-                    print(f"  {ep}  [tracked-only; live state unknown]")
-                found_any = True
-            else:
-                print("  (no backends)")
+        # Collect all endpoints to display: state-file + untracked haproxy entries.
+        tracked_eps = list(eps)
+        untracked_eps = sorted(live_eps - state_set)
+        all_eps = tracked_eps + untracked_eps
+
+        if not all_eps:
+            console.print("  (no backends)")
             continue
 
-        # Annotate state-file entries.
-        if eps:
-            for ep in eps:
-                if ep in live_eps:
-                    print(f"  {ep}  ✓ live")
-                else:
-                    print(f"  {ep}  ⚠ tracked-only (run `vctl lb auto-add`)")
-            found_any = True
+        table = Table(box=MINIMAL_DOUBLE_HEAD, show_header=True, pad_edge=False)
+        table.add_column("Endpoint", overflow="fold", no_wrap=False)
+        table.add_column("Status")
+        table.add_column("scur", justify="right")
+        table.add_column("qcur", justify="right")
+        table.add_column("running", justify="right")
+        table.add_column("waiting", justify="right")
+        table.add_column("last-check", justify="right")
 
-        # Report untracked endpoints: in haproxy live, NOT in state file.
-        untracked = sorted(live_eps - state_set)
-        for ep in untracked:
-            print(f"  {ep}  ⚠ untracked  (run `vctl lb add {ep}` to track)")
-            found_any = True
+        total_scur = 0
+        total_qcur = 0
+        total_running = 0
+        total_waiting = 0
 
-        if not eps and not untracked:
-            print("  (no backends)")
+        for ep in all_eps:
+            in_state = ep in state_set
+            in_haproxy = ep in live_eps
 
-    if not found_any:
-        print()
-        print("(no backends registered in any pool)")
+            if admin_query_failed:
+                status_str = "⚠ tracked-only"
+            elif in_state and in_haproxy:
+                status_str = "✓ live"
+            elif in_state and not in_haproxy:
+                status_str = "⚠ tracked-only"
+            elif not in_state and in_haproxy:
+                status_str = "⚠ untracked"
+                any_drift = True
+            else:
+                status_str = "?"
+
+            # scur / qcur / lastchg from haproxy stats.
+            scur_val: int | None = None
+            qcur_val: int | None = None
+            lastchg_val: int | None = None
+            pool_stats = haproxy_stats.get(backend_section, {})
+            for _srv_name, srv_data in pool_stats.items():
+                if srv_data.get("ep") == ep:
+                    raw_scur = srv_data.get("scur")
+                    raw_qcur = srv_data.get("qcur")
+                    raw_lastchg = srv_data.get("lastchg")
+                    scur_val = int(raw_scur) if isinstance(raw_scur, int) else None
+                    qcur_val = int(raw_qcur) if isinstance(raw_qcur, int) else None
+                    lastchg_val = int(raw_lastchg) if isinstance(raw_lastchg, int) else None
+                    break
+
+            scur_str = str(scur_val) if scur_val is not None else "--"
+            qcur_str = str(qcur_val) if qcur_val is not None else "--"
+            if scur_val is not None:
+                total_scur += scur_val
+            if qcur_val is not None:
+                total_qcur += qcur_val
+
+            # lastchg: seconds since last health probe.
+            lastchg_str = f"{lastchg_val}s" if lastchg_val is not None else "--"
+
+            # running / waiting from vllm /metrics.
+            host_part, _, port_str = ep.rpartition(":")
+            try:
+                port_int = int(port_str)
+            except ValueError:
+                port_int = 0
+
+            metrics = fetch_vllm_metrics(host_part, port_int, timeout=2.0)
+            running_val = metrics.get("running")
+            waiting_val = metrics.get("waiting")
+            running_str = str(running_val) if running_val is not None else "--"
+            waiting_str = str(waiting_val) if waiting_val is not None else "--"
+            if running_val is not None:
+                total_running += running_val
+            if waiting_val is not None:
+                total_waiting += waiting_val
+
+            table.add_row(ep, status_str, scur_str, qcur_str, running_str, waiting_str, lastchg_str)
+
+        console.print(table)
+        console.print(
+            f"  totals: scur={total_scur}  qcur={total_qcur}  "
+            f"running={total_running}  waiting={total_waiting}"
+        )
+
+    # ------------------------------------------------------------------
+    # 4. Drift notice (if any untracked endpoints appeared above)
+    # ------------------------------------------------------------------
+    if any_drift:
+        console.print(
+            "\n[yellow]Drift detected: endpoints in haproxy not in state file "
+            "(marked ⚠ untracked above). "
+            "Run `vctl lb add <ep>` to track them.[/yellow]"
+        )
+
     return 0
+
+
+def _fetch_haproxy_stats(cli: object) -> dict[str, dict[str, dict[str, int | str]]]:
+    """Parse ``show stat csv`` from haproxy admin socket.
+
+    Returns backend_section -> server_name -> {scur, qcur, lastchg, ep}.
+    Numeric fields are int; ``ep`` is str.
+    Only SERVER rows (svname != BACKEND/FRONTEND) are returned.
+    Falls back to empty dict on any error.
+    """
+    from vctl.lb.runtime import RuntimeClient, _parse_endpoint_from_name
+
+    stats: dict[str, dict[str, dict[str, int | str]]] = {}
+    if not isinstance(cli, RuntimeClient):
+        return stats
+
+    try:
+        raw = cli._send("show stat")  # noqa: SLF001
+    except Exception:
+        return stats
+
+    # HAProxy CSV header: # pxname,svname,qcur,qmax,scur,...,lastchg,...
+    # Column indices are defined by the header line (starts with #).
+    col_pxname = 0
+    col_svname = 1
+    col_qcur = 2
+    col_scur = 4
+    col_lastchg = 23  # typical haproxy 2.x offset; may vary
+    col_addr = 73     # typical; may vary
+
+    header_cols: list[str] = []
+
+    for line in raw.splitlines():
+        if line.startswith("# "):
+            header_cols = [c.strip() for c in line[2:].split(",")]
+            # Build index map from actual header.
+            idx = {c: i for i, c in enumerate(header_cols)}
+            col_pxname = idx.get("pxname", 0)
+            col_svname = idx.get("svname", 1)
+            col_qcur = idx.get("qcur", 2)
+            col_scur = idx.get("scur", 4)
+            col_lastchg = idx.get("lastchg", 23)
+            col_addr = idx.get("addr", 73)
+            continue
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(",")
+        if len(parts) < max(col_pxname, col_svname, col_qcur, col_scur) + 1:
+            continue
+        svname = parts[col_svname] if len(parts) > col_svname else ""
+        if svname in ("BACKEND", "FRONTEND", ""):
+            continue
+        pxname = parts[col_pxname] if len(parts) > col_pxname else ""
+
+        def _int(s: str) -> int:
+            try:
+                return int(s)
+            except (ValueError, IndexError):
+                return 0
+
+        scur = _int(parts[col_scur]) if len(parts) > col_scur else 0
+        qcur = _int(parts[col_qcur]) if len(parts) > col_qcur else 0
+        lastchg = _int(parts[col_lastchg]) if len(parts) > col_lastchg else 0
+        addr_raw = parts[col_addr].strip() if len(parts) > col_addr else ""
+
+        # Decode endpoint from server name (b_<ip>_<port>) or addr column.
+        ep = ""
+        parsed = _parse_endpoint_from_name(svname)
+        if parsed is not None:
+            ep = f"{parsed[0]}:{parsed[1]}"
+        elif addr_raw and addr_raw not in ("0.0.0.0", "-"):
+            # addr column may include port as "ip:port" or just "ip".
+            ep = addr_raw.split(" ")[0]  # strip any trailing flags
+
+        stats.setdefault(pxname, {})[svname] = {
+            "scur": scur,
+            "qcur": qcur,
+            "lastchg": lastchg,
+            "ep": ep,
+        }
+
+    return stats
 
 
 def _build_live_registry(cli: object) -> dict[str, set[str]]:

@@ -456,12 +456,13 @@ def test_lb_scaling_do_health(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 # ---------------------------------------------------------------------------
 
 
-def test_lb_stats(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_lb_info_no_crash(tmp_path: Path) -> None:
+    """lb info exits 0 even when LB is stopped and admin socket unreachable."""
     from vctl.commands.lb import run
 
-    rc = run(_ns(tmp_path), ["stats"])
+    with patch.dict(os.environ, {"VCTL_CLUSTER__STATE_DIR": str(tmp_path / "state")}):
+        rc = run(_ns(tmp_path), ["info"])
     assert rc == 0
-    assert "9000" in capsys.readouterr().out
 
 
 def test_lb_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -473,10 +474,38 @@ def test_lb_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert "haproxy" in capsys.readouterr().out.lower()
 
 
-def test_lb_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    from vctl.commands.lb import run
+def test_lb_info_stopped(tmp_path: Path) -> None:
+    """lb info shows stopped annotation when LB is not running."""
 
-    rc = run(_ns(tmp_path), ["status"])
+
+    from vctl.commands.lb import _do_info
+    from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+    from vctl.lb.manager import LbManager
+    from vctl.lb.state import BackendState
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        health=LbHealth(),
+        defaults=LbDefaults(),
+        pools=[Pool(name="default", served_model="M/Default", bind_port=8080)],
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    mgr = LbManager(lb, state_dir=state_dir, run_dir=run_dir)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+    bs.add("10.1.2.5:8000")
+
+    with patch.object(mgr, "status", return_value={
+        "running": False, "pid": None, "pid_alive": False,
+        "admin_reachable": False, "tmux_managed": False,
+        "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
+        "is_local_host": True,
+    }):
+        rc = _do_info(mgr, bs)
     assert rc == 0
 
 

@@ -3,6 +3,39 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.4] - 2026-05-02
+
+**BREAKING**: `vctl lb status`, `vctl lb stats`, and `vctl lb list` have been removed.
+Their output is now part of `vctl lb info`. `vctl lb health` is retained for scripting.
+
+### Added
+- **`vctl lb info` — unified dashboard:** single rich-table command that replaces the
+  four separate read-only commands (`status`, `stats`, `list`, and the process fields
+  previously scattered across them). Shows (in one screen):
+  - LB process panel: pid, pid_alive, admin reachable, admin_bind, tmux session,
+    cfg path, is_local_host, stats UI URL.
+  - Per-pool table with columns: `Endpoint | Status | scur | qcur | running | waiting |
+    last-check`. `scur` / `qcur` come from HAProxy `show stat csv`; `running` / `waiting`
+    come from each backend's vLLM Prometheus `/metrics` endpoint.
+  - Per-pool totals footer: `totals: scur=N  qcur=N  running=N  waiting=N`.
+  - Drift section when any endpoint is in HAProxy but not in the state file.
+  - Graceful degradation: LB stopped → compact state-file listing; admin socket
+    unreachable → WARNING line + state-file fallback; vLLM `/metrics` error → `--` in
+    running/waiting columns. Always exits 0.
+- **`fetch_vllm_metrics(host, port, timeout=2.0)`** in `vctl.lb.probe`: fetches vLLM
+  Prometheus text exposition from `/metrics`, strips optional `{label}` blocks, and
+  returns `{"running": N | None, "waiting": N | None}`. Returns `None` on any network
+  or HTTP error without raising. 2 s timeout by default.
+
+### Removed (BREAKING)
+- `vctl lb status` — process info now in `vctl lb info` LB process panel.
+- `vctl lb stats` — stats UI URL now shown in `vctl lb info` LB process panel.
+- `vctl lb list` — backend listing + live/tracked/untracked annotation now in
+  `vctl lb info` per-pool tables.
+
+### Retained
+- `vctl lb health` — exit 0/1 gate for scripting (unchanged).
+
 ## [0.2.3] - 2026-05-01
 
 Hotfix release picking up F9 (already on main since ea6cfb0) plus three new

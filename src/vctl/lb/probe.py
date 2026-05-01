@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import TypedDict
 
 import httpx
@@ -13,6 +14,11 @@ class ProbeResult(TypedDict, total=False):
     health_code: int
     models_loaded: bool
     num_requests_running: float
+
+
+class VllmMetrics(TypedDict, total=False):
+    running: int | None
+    waiting: int | None
 
 
 def probe_local_vllm(port: int, timeout: float = 2.0) -> ProbeResult:
@@ -66,3 +72,49 @@ def probe_vllm(host: str, port: int, timeout: float = 2.0) -> ProbeResult:
     except Exception:
         pass
     return out
+
+
+# Regex to strip optional {labels} between metric name and value.
+_LABEL_RE = re.compile(r"\{[^}]*\}")
+
+
+def fetch_vllm_metrics(host: str, port: int, timeout: float = 2.0) -> VllmMetrics:
+    """Fetch vLLM Prometheus metrics from ``/metrics``.
+
+    Returns ``{'running': N | None, 'waiting': N | None}``.
+    ``None`` on any network / parse error (never raises).
+
+    Parses Prometheus text exposition: looks for lines starting with
+    ``vllm:num_requests_running`` and ``vllm:num_requests_waiting``,
+    strips optional ``{labels}`` between the metric name and the value,
+    then takes the last whitespace-delimited token as a float cast to int.
+    Ignores ``# HELP`` / ``# TYPE`` comment lines.
+    """
+    result: VllmMetrics = {"running": None, "waiting": None}
+    try:
+        with httpx.Client(timeout=timeout) as cli:
+            resp = cli.get(f"http://{host}:{port}/metrics")
+            resp.raise_for_status()
+            text = resp.text
+    except Exception:
+        return result
+
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        # Strip labels block so "vllm:num_requests_running{...} 3.0" parses cleanly.
+        stripped = _LABEL_RE.sub("", line)
+        tokens = stripped.split()
+        if len(tokens) < 2:
+            continue
+        name = tokens[0]
+        try:
+            val = int(float(tokens[-1]))
+        except (ValueError, IndexError):
+            continue
+        if name == "vllm:num_requests_running":
+            result["running"] = val
+        elif name == "vllm:num_requests_waiting":
+            result["waiting"] = val
+
+    return result

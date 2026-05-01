@@ -193,6 +193,37 @@ vctl lb drain 10.1.2.5:8000 --pool model-a
 vctl lb wait-ready 2 --pool model-a
 ```
 
+### Dashboard (`vctl lb info`)
+
+`vctl lb info` shows everything in one screen — use it instead of the separate
+`lb status` / `lb list` commands (removed in v0.2.4):
+
+```
+╭─ LB Process ────────────────────────────────────────────────╮
+│ pid 708023  alive=true  admin=0.0.0.0:9001 (reachable)      │
+│ tmux: vctl-lb         is_local_host=true                    │
+│ cfg: /home/x/.vctl/lb/haproxy.cfg                           │
+│ stats UI: http://10.119.30.181:9000                         │
+╰─────────────────────────────────────────────────────────────╯
+
+pool: qwen3-5-9b → http://10.119.30.181:8080   (Qwen/Qwen3.5-9B)
+  Endpoint              Status   scur  qcur  running  waiting  last-check
+  10.119.17.241:8000    ✓ live      0     0        0        0  2s
+  10.119.27.91:8000     ✓ live      2     0        2        1  2s
+  10.119.30.181:8000    ✓ live      0     0        0        0  1s
+  totals: scur=2  qcur=0  running=2  waiting=1
+
+pool: qwen3-vl-30b → http://10.119.30.181:8081   (Qwen/Qwen3-VL-30B-A3B)
+  (no backends)
+```
+
+- **scur / qcur**: current sessions / queued sessions from HAProxy `show stat`.
+- **running / waiting**: GPU queue depth from each backend's vLLM Prometheus `/metrics`.
+  Shows `--` if the endpoint is unreachable (never blocks the dashboard).
+- **Status**: `✓ live` (in state file + HAProxy), `⚠ tracked-only` (state file only —
+  run `lb auto-add`), `⚠ untracked` (HAProxy only — run `lb add <ep>`).
+- Always exits 0. Use `vctl lb health` for scripting (exits 1 on any unhealthy backend).
+
 ---
 
 ## Concepts
@@ -229,13 +260,12 @@ Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Setting
 | `lb install` | Download and install HAProxy binary (uses `HAPROXY_VERSION`). |
 | `lb start` | Start HAProxy on the LB host (guards against self-IP conflict, exit 4). |
 | `lb stop` | Stop the HAProxy process. |
-| `lb status` | Show HAProxy process status. |
+| `lb info` | **Unified dashboard**: process panel + per-pool table with scur/qcur/running/waiting. Always exits 0. |
+| `lb health` | Probe each registered backend; exit non-zero on any unhealthy (scripting gate). |
 | `lb is-host` | Exit 0 if this machine is the configured LB host, else exit 1. |
 | `lb where` | Print the LB host IP. |
-| `lb list` | List registered backends from the state file. |
-| `lb wait-ready` | Block until `ready_count` backends pass health checks AND the LB front returns HTTP 200 (AT-12). |
-| `lb stats` | Dump HAProxy stats via admin socket. |
-| `lb logs` | Tail HAProxy logs. |
+| `lb wait-ready [N] [--pool <name>]` | Block until ≥N ready backends pass health checks AND the LB front returns HTTP 200. |
+| `lb logs` | Print HAProxy log file. |
 | `lb config` | Print the rendered HAProxy config. |
 | `lb reload` | Reload HAProxy config without dropping connections. |
 | `lb add <ep> [--pool <name>]` | Add a backend to HAProxy (idempotent). Auto-routes by `/v1/models` probe; `--pool` overrides. |
@@ -244,8 +274,6 @@ Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Setting
 | `lb attach` | Register a backend and wait for its `/v1/models` health probe to pass. |
 | `lb detach` | Drain then remove a backend. |
 | `lb auto-add` | Discover live backends from the state file and attach all. |
-| `lb health` | Check health of all registered backends, grouped by pool. |
-| `lb wait-ready [N] [--pool <name>]` | Wait for ≥N ready backends in every non-empty pool (or one named pool). |
 
 ### `vctl config` — schema and migration
 

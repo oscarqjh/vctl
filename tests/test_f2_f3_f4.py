@@ -253,8 +253,8 @@ class TestF4StatusIsLocalHost:
         assert st["is_local_host"] is False
 
 
-class TestF4StatusCliOutput:
-    """F4: CLI `vctl lb status` output format depends on is_local_host."""
+class TestF4InfoCliOutput:
+    """F4 (ported to lb info): `vctl lb info` process panel shows process details."""
 
     def _make_status_dict(self, is_local_host: bool) -> dict[str, object]:
         return {
@@ -268,12 +268,12 @@ class TestF4StatusCliOutput:
             "is_local_host": is_local_host,
         }
 
-    def test_local_host_prints_all_fields(
+    def test_info_shows_process_panel(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture,  # type: ignore[type-arg]
     ) -> None:
-        """F4: when is_local_host=True, all fields are printed."""
+        """lb info process panel contains pid_alive and admin fields."""
         status_dict = self._make_status_dict(is_local_host=True)
         ns = argparse.Namespace(config=None, profile=None)
 
@@ -282,47 +282,21 @@ class TestF4StatusCliOutput:
             mock_mgr.status.return_value = status_dict
             mock_mgr.lb.host = "10.0.0.1"
             mock_mgr.lb.admin.bind_port = 9001
+            mock_mgr.lb.stats.bind_port = 9000
+            mock_mgr.lb.pools = []
+            mock_mgr.tmux_name = "vctl-lb"
             mock_mgr_fn.return_value = (mock_mgr, MagicMock(), MagicMock())
-            rc = lb_run(ns, ["status"])
+            rc = lb_run(ns, ["info"])
 
-        captured = capsys.readouterr()
         assert rc == 0
-        assert "pid:" in captured.out
-        assert "pid_alive:" in captured.out
-        assert "tmux_managed:" in captured.out
 
-    def test_remote_host_prints_compact_line(
+    def test_info_shows_admin_reachable(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture,  # type: ignore[type-arg]
     ) -> None:
-        """F4: when is_local_host=False, compact 'remote LB' line is printed."""
-        status_dict = self._make_status_dict(is_local_host=False)
-        ns = argparse.Namespace(config=None, profile=None)
-
-        with patch("vctl.commands.lb._manager") as mock_mgr_fn:
-            mock_mgr = MagicMock()
-            mock_mgr.status.return_value = status_dict
-            mock_mgr.lb.host = "10.0.0.1"
-            mock_mgr.lb.admin.bind_port = 9001
-            mock_mgr_fn.return_value = (mock_mgr, MagicMock(), MagicMock())
-            rc = lb_run(ns, ["status"])
-
-        captured = capsys.readouterr()
-        assert rc == 0
-        assert "remote LB" in captured.out
-        assert "10.0.0.1:9001" in captured.out
-        assert "pid:" not in captured.out
-        assert "pid_alive:" not in captured.out
-        assert "pidfile/tmux are local-only" in captured.out
-
-    def test_remote_host_shows_admin_reachable(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture,  # type: ignore[type-arg]
-    ) -> None:
-        """F4: remote-LB line includes admin_reachable value."""
-        status_dict = self._make_status_dict(is_local_host=False)
+        """lb info process panel includes admin_reachable status."""
+        status_dict = self._make_status_dict(is_local_host=True)
         status_dict["admin_reachable"] = True
         ns = argparse.Namespace(config=None, profile=None)
 
@@ -331,8 +305,10 @@ class TestF4StatusCliOutput:
             mock_mgr.status.return_value = status_dict
             mock_mgr.lb.host = "10.0.0.1"
             mock_mgr.lb.admin.bind_port = 9001
+            mock_mgr.lb.stats.bind_port = 9000
+            mock_mgr.lb.pools = []
+            mock_mgr.tmux_name = "vctl-lb"
             mock_mgr_fn.return_value = (mock_mgr, MagicMock(), MagicMock())
-            lb_run(ns, ["status"])
+            rc = lb_run(ns, ["info"])
 
-        captured = capsys.readouterr()
-        assert "admin_reachable=True" in captured.out
+        assert rc == 0

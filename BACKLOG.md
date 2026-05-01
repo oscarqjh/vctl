@@ -1,5 +1,15 @@
 # Backlog
 
+## v0.2.4 — unified lb info
+
+- [x] Add `vctl lb info` unified dashboard (rich table, per-pool scur/qcur/running/waiting).
+- [x] Add `fetch_vllm_metrics(host, port)` to `vctl.lb.probe` — parses vLLM Prometheus
+      `/metrics`, returns `{running, waiting}` with graceful `None` on error.
+- [x] Remove `vctl lb status`, `vctl lb stats`, `vctl lb list` (BREAKING).
+- [x] Port F6 live-registry annotation tests from `_do_list` to `_do_info`.
+- [x] New `tests/test_commands_lb_info.py` with comprehensive coverage.
+- [x] Bump to v0.2.4, update CHANGELOG, README, BACKLOG.
+
 ## In progress
 - v0.2.2 follow-up: pidfile/pgrep fallback for foreground haproxy, test isolation, etc.
 
