@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import socket
 from pathlib import Path
 
 from vctl.config.models import LbHaproxy
@@ -76,6 +78,48 @@ class LbManager:
         )
 
     def status(self) -> dict[str, object]:
-        running = tmux_session_exists(_TMUX_NAME)
-        pid = self.pid_path.read_text().strip() if self.pid_path.exists() else None
-        return {"running": running, "pid": pid, "cfg_path": str(self.cfg_path)}
+        """Comprehensive status: detect haproxy regardless of who started it.
+
+        Checks (in order):
+          1. pidfile present + the pid is alive  → process truth
+          2. admin port reachable (TCP)          → service truth
+          3. tmux-managed via `vctl-lb` session   → ownership flag
+
+        `running` is True if either pidfile alive OR admin port reachable.
+        """
+        # 1. pidfile + alive
+        pid: int | None = None
+        pid_alive = False
+        if self.pid_path.exists():
+            try:
+                raw = self.pid_path.read_text().strip()
+                if raw:
+                    pid = int(raw.split()[0])
+                    # Signal 0 = does the process exist + are we allowed to signal it
+                    import os
+
+                    with contextlib.suppress(OSError, ProcessLookupError):
+                        os.kill(pid, 0)
+                        pid_alive = True
+            except (ValueError, OSError):
+                pid = None
+
+        # 2. admin port reachable
+        admin_reachable = False
+        with contextlib.suppress(OSError):
+            with socket.create_connection(
+                (self.lb.host, self.lb.admin.bind_port), timeout=2
+            ):
+                admin_reachable = True
+
+        # 3. tmux-managed (informational only)
+        tmux_managed = tmux_session_exists(_TMUX_NAME)
+
+        return {
+            "running": pid_alive or admin_reachable,
+            "pid": pid,
+            "pid_alive": pid_alive,
+            "admin_reachable": admin_reachable,
+            "tmux_managed": tmux_managed,
+            "cfg_path": str(self.cfg_path),
+        }
