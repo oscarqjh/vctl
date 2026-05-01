@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 import psutil
@@ -46,26 +47,41 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     rc = resolve(ns.config, profile=ns.profile)
     state_dir = Path(rc.cluster.state_dir)
     mgr = LbManager(rc.lb, state_dir=state_dir, run_dir=Path.home() / ".vctl" / "lb")
-    bs = BackendState(state_dir, rc.lb.host)
     self_ip = detect_self_ip()
-    matching = [ep for ep in bs.list() if ep.startswith(f"{self_ip}:")]
 
     actions: list[str] = []
-    if matching:
-        ep = matching[0]
-        lb_scaling._do_drain(ep, mgr)
-        port = int(ep.rsplit(":", 1)[1])
-        _wait_for_idle(port, timeout=float(os.environ.get("LB_DETACH_WAIT", "30")))
-        lb_scaling._do_remove(ep, mgr, bs)
-        actions.append(f"removed {ep}")
+    errors: list[str] = []
 
+    # Iterate every registered pool rather than hard-coding "default".
+    pool_names = BackendState.list_pools(state_dir, rc.lb.host)
+    for pname in pool_names:
+        bs = BackendState(state_dir, rc.lb.host, pool=pname)
+        matching = [ep for ep in bs.list() if ep.startswith(f"{self_ip}:")]
+        for ep in matching:
+            drain_rc = lb_scaling._do_drain(ep, mgr, pool_name=pname)
+            if drain_rc != 0:
+                msg = f"drain failed (exit {drain_rc}) for {ep} in pool {pname}"
+                print(msg, file=sys.stderr)
+                errors.append(msg)
+            else:
+                port = int(ep.rsplit(":", 1)[1])
+                _wait_for_idle(port, timeout=float(os.environ.get("LB_DETACH_WAIT", "30")))
+            remove_rc = lb_scaling._do_remove(ep, mgr, bs, pool_name=pname)
+            if remove_rc != 0:
+                msg = f"remove failed (exit {remove_rc}) for {ep} in pool {pname}"
+                print(msg, file=sys.stderr)
+                errors.append(msg)
+            else:
+                actions.append(f"removed {ep} (pool: {pname})")
+
+    # Always kill local vllm processes even if drain/remove had errors.
     for pid in _find_local_vllm(rc.server.http_port):
         _kill_tree(pid)
         actions.append(f"killed pid {pid}")
 
     if parsed.json:
-        print(json.dumps({"actions": actions}, indent=2))
+        print(json.dumps({"actions": actions, "errors": errors}, indent=2))
     else:
         for line in actions:
             print(line)
-    return 0
+    return 1 if errors else 0

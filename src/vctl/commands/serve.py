@@ -104,7 +104,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     signal.signal(signal.SIGHUP, _shutdown)
 
     try:
-        _wait_for_ready(rc.server.http_port, timeout=120)
+        _wait_for_ready(rc.server.http_port, timeout=_resolve_ready_timeout(rc))
     except TimeoutError as e:
         _LOG.error("readiness timed out: %s", e)
         _kill_tree(proc.pid)
@@ -119,6 +119,40 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
             return rc_code
         except subprocess.TimeoutExpired:
             pass  # loop back; pending signal handlers run during the sleep in wait()
+
+
+_READY_TIMEOUT_DEFAULT = 1800
+
+
+def _resolve_ready_timeout(rc: object) -> float:
+    """Return the readiness-poll timeout in seconds.
+
+    Precedence (first wins):
+    1. ``rc.env["VLLM_ENGINE_READY_TIMEOUT_S"]`` — per-profile override in the
+       cluster YAML (e.g. for large models that need more than 30 min).
+    2. ``VCTL_READY_TIMEOUT`` OS environment variable — operator-level override.
+    3. Hard default: 1800 s (30 min).
+
+    On parse failure the value is ignored with a warning and the default is used.
+    """
+    default = float(_READY_TIMEOUT_DEFAULT)
+
+    # 1. Profile env dict (populated from cluster YAML rc.env).
+    env_dict: dict[str, object] = {}
+    if hasattr(rc, "env") and isinstance(getattr(rc, "env", None), dict):
+        env_dict = rc.env
+    raw: object = env_dict.get("VLLM_ENGINE_READY_TIMEOUT_S")
+    if raw is None:
+        # 2. OS environment variable.
+        raw = os.environ.get("VCTL_READY_TIMEOUT")
+    if raw is not None:
+        try:
+            return float(int(str(raw)))
+        except (ValueError, TypeError):
+            _LOG.warning(
+                "invalid ready-timeout value %r; falling back to %ss", raw, _READY_TIMEOUT_DEFAULT
+            )
+    return default
 
 
 def _wait_for_ready(port: int, timeout: float) -> None:

@@ -9,8 +9,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import psutil
+import pytest
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -121,6 +123,7 @@ def test_serve_attach_then_sigint_exits_130(tmp_path: Path) -> None:
     port = _free_port()
     env = {
         **os.environ,
+        "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "VCTL_CLUSTER__STATE_DIR": str(state_dir),
         "VCTL_TEST_NO_SOCKET": "1",
@@ -158,6 +161,7 @@ def test_serve_sigint_during_load_exits_130_no_orphans(tmp_path: Path) -> None:
     port = _free_port()
     env = {
         **os.environ,
+        "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "VCTL_CLUSTER__STATE_DIR": str(state_dir),
         "VCTL_TEST_NO_SOCKET": "1",
@@ -212,6 +216,7 @@ def test_serve_fails_fast_when_no_matching_pool(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     env = {
         **os.environ,
+        "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "VCTL_CLUSTER__STATE_DIR": str(state_dir),
         "VCTL_TEST_NO_SOCKET": "1",
@@ -242,6 +247,7 @@ def test_serve_auto_attaches_to_matching_pool(tmp_path: Path) -> None:
     state_dir.mkdir(exist_ok=True)
     env = {
         **os.environ,
+        "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "VCTL_CLUSTER__STATE_DIR": str(state_dir),
         "VCTL_TEST_NO_SOCKET": "1",
@@ -273,3 +279,65 @@ def test_serve_auto_attaches_to_matching_pool(tmp_path: Path) -> None:
     assert (not pool_b_file.exists()) or (not pool_b_file.read_text().strip()), (
         "expected nothing in pool b"
     )
+
+
+# ---------------------------------------------------------------------------
+# A3: _resolve_ready_timeout precedence
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_ready_timeout_from_rc_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A3: VLLM_ENGINE_READY_TIMEOUT_S in rc.env takes precedence over OS env."""
+    from vctl.commands.serve import _resolve_ready_timeout
+
+    monkeypatch.delenv("VCTL_READY_TIMEOUT", raising=False)
+    monkeypatch.delenv("VLLM_ENGINE_READY_TIMEOUT_S", raising=False)
+
+    rc = MagicMock()
+    rc.env = {"VLLM_ENGINE_READY_TIMEOUT_S": "1800"}
+    assert _resolve_ready_timeout(rc) == 1800.0
+
+
+def test_resolve_ready_timeout_from_os_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A3: VCTL_READY_TIMEOUT OS env used when rc.env has no override."""
+    from vctl.commands.serve import _resolve_ready_timeout
+
+    monkeypatch.setenv("VCTL_READY_TIMEOUT", "600")
+    monkeypatch.delenv("VLLM_ENGINE_READY_TIMEOUT_S", raising=False)
+
+    rc = MagicMock()
+    rc.env = {}
+    assert _resolve_ready_timeout(rc) == 600.0
+
+
+def test_resolve_ready_timeout_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A3: default is 1800s when no env overrides are set."""
+    from vctl.commands.serve import _resolve_ready_timeout
+
+    monkeypatch.delenv("VCTL_READY_TIMEOUT", raising=False)
+    monkeypatch.delenv("VLLM_ENGINE_READY_TIMEOUT_S", raising=False)
+
+    rc = MagicMock()
+    rc.env = {}
+    assert _resolve_ready_timeout(rc) == 1800.0
+
+
+def test_resolve_ready_timeout_rc_env_wins_over_os_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A3: rc.env wins over VCTL_READY_TIMEOUT."""
+    from vctl.commands.serve import _resolve_ready_timeout
+
+    monkeypatch.setenv("VCTL_READY_TIMEOUT", "300")
+    rc = MagicMock()
+    rc.env = {"VLLM_ENGINE_READY_TIMEOUT_S": "900"}
+    assert _resolve_ready_timeout(rc) == 900.0
+
+
+def test_resolve_ready_timeout_bad_value_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A3: invalid timeout value logs a warning and falls back to 1800."""
+    from vctl.commands.serve import _resolve_ready_timeout
+
+    monkeypatch.delenv("VCTL_READY_TIMEOUT", raising=False)
+    rc = MagicMock()
+    rc.env = {"VLLM_ENGINE_READY_TIMEOUT_S": "not-a-number"}
+    result = _resolve_ready_timeout(rc)
+    assert result == 1800.0

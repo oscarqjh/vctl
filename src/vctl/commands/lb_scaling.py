@@ -19,9 +19,28 @@ from vctl.platform import detect_self_ip
 _LOG = logging.getLogger(__name__)
 
 
+class _NoOpClient:
+    """Drop-in stub for RuntimeClient used when VCTL_TEST_NO_SOCKET=1.
+
+    All haproxy admin operations succeed silently so tests that don't care
+    about haproxy interactions still pass.  Tests that *do* want to assert
+    on haproxy calls should monkeypatch ``_client`` directly to inject a
+    ``unittest.mock.MagicMock``.
+    """
+
+    def add_server(self, backend: str, name: str, ep: str) -> str:
+        return "new"
+
+    def remove_server(self, backend: str, name: str) -> None:
+        pass
+
+    def set_state(self, backend: str, name: str, state: str) -> None:
+        pass
+
+
 def _client(mgr: LbManager) -> RuntimeClient | None:
     if os.environ.get("VCTL_TEST_NO_SOCKET") == "1":
-        return None
+        return _NoOpClient()  # type: ignore[return-value]
     sock = mgr.sock_path
     try:
         if sock.exists():
@@ -73,7 +92,13 @@ def _do_add_cli(ep: str, mgr: LbManager, bs: BackendState, requested_pool: str |
 
 
 def _do_remove_cli(ep: str, mgr: LbManager, bs: BackendState) -> int:
-    """User-invoked ``lb remove``. Scan all pools for the ep."""
+    """User-invoked ``lb remove``. Scan all pools for the ep.
+
+    - If found in a pool state file → delegate to _do_remove (haproxy-first).
+    - If not found in any state file → attempt haproxy-side cleanup against all
+      configured pools (server may still linger there without a state-file entry).
+      Returns 0 if any haproxy removal succeeded, 1 if nothing was removed anywhere.
+    """
     pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
     if not pool_names:
         pool_names = [p.name for p in mgr.lb.pools]
@@ -81,9 +106,32 @@ def _do_remove_cli(ep: str, mgr: LbManager, bs: BackendState) -> int:
         pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
         if ep in pbs.list():
             return _do_remove(ep, mgr, pbs, pool_name=pname)
-    # Not found in any pool — endpoint may have already been removed.
+
+    # Not found in any pool state file — attempt haproxy-side cleanup.
+    cli = _client(mgr)
+    if cli is None:
+        print(
+            f"endpoint {ep} not found in any pool state file and LB admin socket unreachable",
+            file=sys.stderr,
+        )
+        return 1
+
+    any_removed = False
+    for pname in pool_names:
+        backend_section = f"pool_{pname}"
+        name = _name_for(ep)
+        try:
+            cli.set_state(backend_section, name, "maint")
+            cli.remove_server(backend_section, name)
+            print(f"remove {ep} (removed from haproxy only, pool: {pname})", file=sys.stderr)
+            any_removed = True
+        except Exception:
+            pass
+
+    if any_removed:
+        return 0
     print(f"endpoint {ep} not found in any pool state file", file=sys.stderr)
-    return 0
+    return 1
 
 
 def _resolve_pool_name(mgr: LbManager, requested: str | None) -> str:
@@ -112,34 +160,110 @@ def _do_add(ep: str, mgr: LbManager, bs: BackendState, pool_name: str | None = N
     pool_name = _resolve_pool_name(mgr, pool_name)
     backend_section = f"pool_{pool_name}"
     state_result = bs.add(ep)
+    label = "(new)" if state_result == "new" else "(already present)"
     cli = _client(mgr)
     if cli is not None:
         try:
             cli.add_server(backend_section, _name_for(ep), ep)
         except Exception as e:
-            _LOG.error("admin socket add_server failed: %s", e)
+            msg = str(e)
+            if "already exists" in msg.lower() or "already present" in msg.lower():
+                # Idempotent re-add: haproxy already knows this server.
+                pass
+            elif "no such backend" in msg.lower():
+                print(
+                    f"haproxy refused add_server for {ep}: {e} (pool section {backend_section!r}"
+                    f" missing from haproxy config?)",
+                    file=sys.stderr,
+                )
+                # Roll back state add if it was a fresh insert.
+                if state_result == "new":
+                    bs.remove(ep)
+                return 3
+            else:
+                print(
+                    f"haproxy admin add_server failed for {ep}: {e}",
+                    file=sys.stderr,
+                )
+                # Roll back state add if it was a fresh insert.
+                if state_result == "new":
+                    bs.remove(ep)
+                return 1
         # Force ready: clears any lingering drain/maint from a previous
         # session that crashed mid-detach. Idempotent.
         with contextlib.suppress(Exception):
             cli.set_state(backend_section, _name_for(ep), "ready")
-    label = "(new)" if state_result == "new" else "(already present)"
     print(f"add {ep} {label} (pool: {pool_name})", file=sys.stderr)
     return 0
 
 
 def _do_remove(ep: str, mgr: LbManager, bs: BackendState, pool_name: str | None = None) -> int:
+    """Haproxy-first removal: set maint → del server → remove from state file.
+
+    If the admin socket is unreachable the state file is NOT mutated (to avoid
+    split-brain).  If any haproxy step fails the state file is also NOT mutated
+    (server left in maint state on partial failure).
+    """
     pool_name = _resolve_pool_name(mgr, pool_name)
     backend_section = f"pool_{pool_name}"
-    bs.remove(ep)
     cli = _client(mgr)
-    if cli is not None:
-        # HAProxy refuses `del server` unless the server is in maint state.
-        # Set maint first (idempotent), then del. Both errors swallowed —
-        # state file is always updated.
-        with contextlib.suppress(Exception):
-            cli.set_state(backend_section, _name_for(ep), "maint")
-        with contextlib.suppress(Exception):
-            cli.remove_server(backend_section, _name_for(ep))
+
+    if cli is None:
+        # A4-family: unreachable socket → clear error, exit 4, no state mutation.
+        print(
+            f"LB admin socket unreachable at {mgr.sock_path} (and TCP"
+            f" {mgr.lb.host}:{mgr.lb.admin.bind_port}); cannot remove {ep}",
+            file=sys.stderr,
+        )
+        return 4
+
+    name = _name_for(ep)
+
+    # Step 1: set server maint (HAProxy requires maint before del server).
+    try:
+        cli.set_state(backend_section, name, "maint")
+    except Exception as e:
+        msg = str(e)
+        no_such = "no such server" in msg.lower()
+        already_maint = "already in maint" in msg.lower()
+        if no_such:
+            # Server is already absent from haproxy — remove from state file
+            # to reconcile, then return 0 (idempotent).
+            bs.remove(ep)
+            print(
+                f"remove {ep} (absent from haproxy, cleaned state) (pool: {pool_name})",
+                file=sys.stderr,
+            )
+            return 0
+        if not already_maint:
+            print(
+                f"haproxy set_state maint failed for {ep}: {e}",
+                file=sys.stderr,
+            )
+            return 1
+        # already_maint — continue to del server.
+
+    # Step 2: del server.
+    try:
+        cli.remove_server(backend_section, name)
+    except Exception as e:
+        msg = str(e)
+        if "no such server" in msg.lower():
+            # Already removed from haproxy — reconcile state file.
+            bs.remove(ep)
+            print(
+                f"remove {ep} (absent from haproxy, cleaned state) (pool: {pool_name})",
+                file=sys.stderr,
+            )
+            return 0
+        print(
+            f"haproxy remove_server failed for {ep} (left in maint): {e}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Step 3: only update the state file after both haproxy ops succeed.
+    bs.remove(ep)
     return 0
 
 
@@ -147,8 +271,15 @@ def _do_drain(ep: str, mgr: LbManager, pool_name: str | None = None) -> int:
     pool_name = _resolve_pool_name(mgr, pool_name)
     backend_section = f"pool_{pool_name}"
     cli = _client(mgr)
-    if cli is not None:
-        cli.set_state(backend_section, _name_for(ep), "drain")
+    if cli is None:
+        # A4: unreachable socket → clear error, exit 4.
+        print(
+            f"LB admin socket unreachable at {mgr.sock_path} (and TCP"
+            f" {mgr.lb.host}:{mgr.lb.admin.bind_port}); cannot drain {ep}",
+            file=sys.stderr,
+        )
+        return 4
+    cli.set_state(backend_section, _name_for(ep), "drain")
     return 0
 
 
@@ -171,15 +302,25 @@ def _do_detach(mgr: LbManager, bs: BackendState) -> int:
     if not pool_names:
         # Fall back to pools in LB config.
         pool_names = [p.name for p in mgr.lb.pools]
+
+    cli = _client(mgr)
+    if cli is None:
+        # A4-family: unreachable socket → clear error, exit 4.
+        print(
+            f"LB admin socket unreachable at {mgr.sock_path} (and TCP"
+            f" {mgr.lb.host}:{mgr.lb.admin.bind_port}); cannot detach",
+            file=sys.stderr,
+        )
+        return 4
+
     for pname in pool_names:
         pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
         matching = [ep for ep in pbs.list() if ep.startswith(f"{self_ip}:")]
         if not matching:
             continue
         ep = matching[0]
-        cli = _client(mgr)
         backend_section = f"pool_{pname}"
-        if cli is not None:
+        with contextlib.suppress(Exception):
             cli.set_state(backend_section, _name_for(ep), "drain")
         timeout = float(os.environ.get("LB_DETACH_WAIT", "30"))
         deadline = time.monotonic() + timeout
@@ -206,6 +347,10 @@ def _do_auto_add(mgr: LbManager, bs: BackendState) -> int:
             if cli is not None:
                 with contextlib.suppress(Exception):
                     cli.add_server(backend_section, _name_for(ep), ep)
+                # A7: force-set state ready after add so backends don't linger
+                # in maint after a recovery restart.
+                with contextlib.suppress(Exception):
+                    cli.set_state(backend_section, _name_for(ep), "ready")
     return 0
 
 
