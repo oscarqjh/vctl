@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import importlib
 import logging
+import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 from vctl import __version__
 
@@ -26,13 +28,60 @@ _COMMANDS: dict[str, str] = {
 
 _PROFILE_AWARE = {"info", "serve", "args", "preflight", "stop"}
 
+# Sentinel: distinguishes "user supplied --config" from "no --config given".
+_CONFIG_SENTINEL = "<auto>"
+
+# Default home location for `uv tool install`-ed users.
+_CONFIG_DEFAULT_HOME = Path.home() / "vctl-cfg" / "cluster.yaml"
+
+
+def _resolve_config_path(cli_arg: str | None) -> str:
+    """Pick which cluster.yaml to load.
+
+    Order:
+      1. --config flag
+      2. CLUSTER_CONFIG env var
+      3. ./cluster.yaml (cwd, back-compat)
+      4. ~/vctl-cfg/cluster.yaml (default for `uv tool install`-ed users)
+    Returns the chosen path even if it doesn't exist; let the loader raise
+    a clear FileNotFoundError naming candidates that were tried.
+    """
+    if cli_arg:
+        return cli_arg
+    env = os.environ.get("CLUSTER_CONFIG")
+    if env:
+        return env
+    cwd_cfg = Path.cwd() / "cluster.yaml"
+    if cwd_cfg.is_file():
+        return str(cwd_cfg)
+    return str(_CONFIG_DEFAULT_HOME)
+
+
+def _config_path_error_message() -> str:
+    return (
+        "could not find cluster.yaml. Searched (in order):\n"
+        f"  --config flag (not provided)\n"
+        f"  CLUSTER_CONFIG env (={os.environ.get('CLUSTER_CONFIG', '<unset>')})\n"
+        f"  {Path.cwd() / 'cluster.yaml'}\n"
+        f"  {_CONFIG_DEFAULT_HOME}\n"
+        f"\n"
+        f"Run `vctl init-config --dir ~/vctl-cfg` to bootstrap one."
+    )
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vctl", description="Typed CLI for vLLM fleet.")
     p.add_argument("-V", "--version", action="version", version=f"vctl {__version__}")
     p.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
     p.add_argument("--log-format", default="pretty", choices=["pretty", "json"])
-    p.add_argument("--config", default="cluster.yaml")
+    p.add_argument(
+        "--config",
+        default=_CONFIG_SENTINEL,
+        help=(
+            "path to cluster.yaml "
+            "(default: $CLUSTER_CONFIG, ./cluster.yaml, or ~/vctl-cfg/cluster.yaml)"
+        ),
+    )
     p.add_argument("--profile", default=None)
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for name in _COMMANDS:
@@ -82,10 +131,20 @@ def main(argv: list[str] | None = None) -> int:
 
     _configure_logging(level=ns.log_level, fmt=ns.log_format)
 
+    # Resolve default config path before dispatch so commands can rely on
+    # ns.config being a usable string.
+    ns.config = _resolve_config_path(None if ns.config == _CONFIG_SENTINEL else ns.config)
+
     try:
         return _dispatch(ns.command, rest, ns)
     except FileNotFoundError as e:
-        _LOG.error("%s", e)
+        # If the missing file is the cluster.yaml we just resolved, augment
+        # the error message with the search list.
+        msg = str(e)
+        if "cluster.yaml" in msg:
+            _LOG.error("%s\n\n%s", msg, _config_path_error_message())
+        else:
+            _LOG.error("%s", e)
         return 2
     except KeyboardInterrupt:
         return 130

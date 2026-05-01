@@ -30,6 +30,24 @@ vctl --version
 
 ---
 
+## Where vctl looks for `cluster.yaml`
+
+In order:
+1. `--config <path>` CLI flag
+2. `CLUSTER_CONFIG` env var
+3. `./cluster.yaml` (current directory)
+4. `~/vctl-cfg/cluster.yaml` (default after `vctl init-config`)
+
+Bootstrap a config in the default location so `vctl` works from any directory:
+
+```bash
+vctl init-config --dir ~/vctl-cfg
+```
+
+Now `vctl info`, `vctl serve`, etc. work from any directory.
+
+---
+
 ## Quickstart
 
 ### 0. Bootstrap your config (recommended)
@@ -37,11 +55,11 @@ vctl --version
 The fastest way to start is with `vctl init-config`, which scaffolds a fully-documented `cluster.yaml` and a default set of model profiles:
 
 ```bash
-vctl init-config
+vctl init-config --dir ~/vctl-cfg
 # Created:
-#   ./cluster.yaml
-#   ./models/qwen3_5-9b.yaml
-#   ./models/qwen3-vl-30b-a3b.yaml
+#   ~/vctl-cfg/cluster.yaml
+#   ~/vctl-cfg/models/qwen3_5-9b.yaml
+#   ~/vctl-cfg/models/qwen3-vl-30b-a3b.yaml
 ```
 
 Every field is documented inline. Edit `cluster.yaml` to set `lb.host`, `cluster.venv`, and `cluster.state_dir` for your environment, then pick a profile as your default.
