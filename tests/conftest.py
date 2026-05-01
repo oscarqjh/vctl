@@ -59,3 +59,86 @@ def _sweep_leaked_haproxy_at_session_end() -> pytest.Generator[None, None, None]
             "/tmp/pytest-of-* after session end",
             stacklevel=1,
         )
+
+
+# ---------------------------------------------------------------------------
+# F7: helpers + session-scoped autouse fixture — sweep any vctl-serve /
+# fake-vllm orphans whose cmdline references a pytest temp path.
+# Matches ONLY on /tmp/pytest-of-* or /tmp/tmp*/bin/vllm patterns so we
+# never touch production serve processes (which live under ~/.vctl/... or
+# /mnt/... paths).
+# ---------------------------------------------------------------------------
+
+
+def _force_cleanup_vctl_serve_for_path(stub_path: Path) -> int:
+    """SIGKILL any vctl-serve / fake-vllm orphans whose cmdline contains stub_path.
+
+    Returns count of killed processes. Specific to test paths; never matches prod.
+    The *stub_path* argument should be the test fixture's temporary bin directory
+    (e.g. ``tmp_path / "bin"``).  Only processes whose cmdline includes that path
+    as a substring are killed, so ``~/.vctl/`` paths are never matched.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return 0
+
+    target = str(stub_path)
+    killed = 0
+    for proc in psutil.process_iter(["cmdline"]):
+        try:
+            cmd = proc.info.get("cmdline") or []
+            cmd_str = " ".join(cmd)
+            if target in cmd_str:
+                proc.send_signal(signal.SIGKILL)
+                killed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return killed
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sweep_leaked_vctl_serve_at_session_end() -> pytest.Generator[None, None, None]:
+    """Yield during tests; after the session SIGKILL any ``python -m vctl.*serve``
+    or fake-vllm process whose cmdline contains ``/tmp/pytest-of-`` or whose
+    path matches ``/tmp/tmp*/bin/vllm``.
+
+    This is the F7 counterpart to F3's haproxy sweep.  Never matches production
+    serve invocations (which run under ``~/.vctl/``, ``/mnt/aigc/``, etc.).
+    """
+    yield  # tests run here
+
+    try:
+        import psutil
+    except ImportError:
+        return
+
+    _pytest_markers = ("/tmp/pytest-of-", "/tmp/tmp")
+
+    killed = 0
+    for proc in psutil.process_iter(["cmdline"]):
+        try:
+            cmd = proc.info.get("cmdline") or []
+            if not cmd:
+                continue
+            cmd_str = " ".join(cmd)
+            # Must look like a vctl serve invocation OR a fake-vllm under a pytest tmpdir.
+            is_vctl_serve = "vctl" in cmd_str and "serve" in cmd_str
+            is_fake_vllm = "/bin/vllm" in cmd_str
+            if not (is_vctl_serve or is_fake_vllm):
+                continue
+            # Restrict to pytest-owned paths — never match production.
+            if any(marker in cmd_str for marker in _pytest_markers):
+                proc.send_signal(signal.SIGKILL)
+                killed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    if killed:
+        import warnings
+
+        warnings.warn(
+            f"[F7] swept {killed} leaked vctl-serve/fake-vllm process(es) pointing at "
+            "pytest temp paths after session end",
+            stacklevel=1,
+        )

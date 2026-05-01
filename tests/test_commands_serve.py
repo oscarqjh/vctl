@@ -14,6 +14,8 @@ from unittest.mock import MagicMock
 import psutil
 import pytest
 
+from tests.conftest import _force_cleanup_vctl_serve_for_path
+
 FIX = Path(__file__).parent / "fixtures"
 
 
@@ -132,24 +134,35 @@ def test_serve_attach_then_sigint_exits_130(tmp_path: Path) -> None:
         "VCTL_LB__CLIENT__BIND_PORT": "8080",
         "LB_DETACH_WAIT": "3",
         "VCTL_KILL_GRACE": "5",
+        # F8: disable PPID watchdog in tests (we launch from pytest which may be
+        # reparented by CI container init and cause spurious self-exits).
+        "VCTL_NO_PPID_WATCHDOG": "1",
     }
     cmd = [sys.executable, "-m", "vctl", "--log-format", "json", "serve", "--skip-preflight"]
     proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # Poll for attach — process startup + readiness check can take >3s on slow CI.
-    # New layout: <state_dir>/<lb_host>/<pool>_backends.txt
-    state_file = state_dir / "10.0.0.1" / "default_backends.txt"
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if state_file.exists() and state_file.read_text().strip():
-            break
-        time.sleep(0.5)
-    assert state_file.exists(), f"attach should have registered (state_dir={state_dir})"
-    assert state_file.read_text().strip(), "state file empty after attach"
+    # F7: always clean up the subprocess tree on test failure / abnormal exit.
+    try:
+        # Poll for attach — process startup + readiness check can take >3s on slow CI.
+        # New layout: <state_dir>/<lb_host>/<pool>_backends.txt
+        state_file = state_dir / "10.0.0.1" / "default_backends.txt"
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if state_file.exists() and state_file.read_text().strip():
+                break
+            time.sleep(0.5)
+        assert state_file.exists(), f"attach should have registered (state_dir={state_dir})"
+        assert state_file.read_text().strip(), "state file empty after attach"
 
-    proc.send_signal(signal.SIGINT)
-    rc = proc.wait(timeout=15)
-    assert rc == 130
-    assert not state_file.read_text().strip(), "state file should be empty after detach"
+        proc.send_signal(signal.SIGINT)
+        rc = proc.wait(timeout=15)
+        assert rc == 130
+        assert not state_file.read_text().strip(), "state file should be empty after detach"
+    finally:
+        # F7: ensure no orphan processes remain even if the test body raises.
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+        _force_cleanup_vctl_serve_for_path(bin_dir)
 
 
 def test_serve_sigint_during_load_exits_130_no_orphans(tmp_path: Path) -> None:
@@ -171,33 +184,42 @@ def test_serve_sigint_during_load_exits_130_no_orphans(tmp_path: Path) -> None:
         "VCTL_LB__CLIENT__BIND_PORT": "8080",
         "LB_DETACH_WAIT": "3",
         "VCTL_KILL_GRACE": "5",
+        # F8: disable PPID watchdog in tests.
+        "VCTL_NO_PPID_WATCHDOG": "1",
     }
     cmd = [sys.executable, "-m", "vctl", "--log-format", "json", "serve", "--skip-preflight"]
     proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # Collect child PIDs before sending signal so we can check for orphans.
-    time.sleep(1)
+    # F7: always clean up the subprocess tree on test failure / abnormal exit.
     try:
-        children = psutil.Process(proc.pid).children(recursive=True)
-        child_pids = [c.pid for c in children]
-    except psutil.NoSuchProcess:
-        child_pids = []
+        # Collect child PIDs before sending signal so we can check for orphans.
+        time.sleep(1)
+        try:
+            children = psutil.Process(proc.pid).children(recursive=True)
+            child_pids = [c.pid for c in children]
+        except psutil.NoSuchProcess:
+            child_pids = []
 
-    # Send SIGINT while the stub is still in its "not-ready" phase.
-    proc.send_signal(signal.SIGINT)
-    rc = proc.wait(timeout=15)
-    assert rc == 130, f"expected exit 130, got {rc}"
+        # Send SIGINT while the stub is still in its "not-ready" phase.
+        proc.send_signal(signal.SIGINT)
+        rc = proc.wait(timeout=15)
+        assert rc == 130, f"expected exit 130, got {rc}"
 
-    # State file must NOT exist (process was never attached).
-    # New layout: <state_dir>/<lb_host>/<pool>_backends.txt
-    state_file = state_dir / "10.0.0.1" / "default_backends.txt"
-    if state_file.exists():
-        assert not state_file.read_text().strip(), "state file should be empty (never attached)"
+        # State file must NOT exist (process was never attached).
+        # New layout: <state_dir>/<lb_host>/<pool>_backends.txt
+        state_file = state_dir / "10.0.0.1" / "default_backends.txt"
+        if state_file.exists():
+            assert not state_file.read_text().strip(), "state file should be empty (never attached)"
 
-    # No orphaned children.
-    time.sleep(1)
-    for pid in child_pids:
-        assert not psutil.pid_exists(pid), f"child pid {pid} is still alive (orphan)"
+        # No orphaned children.
+        time.sleep(1)
+        for pid in child_pids:
+            assert not psutil.pid_exists(pid), f"child pid {pid} is still alive (orphan)"
+    finally:
+        # F7: ensure no orphan processes remain even if the test body raises.
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+        _force_cleanup_vctl_serve_for_path(bin_dir)
 
 
 def test_serve_fails_fast_when_no_matching_pool(tmp_path: Path) -> None:
@@ -255,6 +277,8 @@ def test_serve_auto_attaches_to_matching_pool(tmp_path: Path) -> None:
         "STUB_MODEL_ID": "M/A",
         "VCTL_KILL_GRACE": "5",
         "LB_DETACH_WAIT": "3",
+        # F8: disable PPID watchdog in tests.
+        "VCTL_NO_PPID_WATCHDOG": "1",
     }
     cmd = [
         sys.executable,
@@ -266,19 +290,26 @@ def test_serve_auto_attaches_to_matching_pool(tmp_path: Path) -> None:
         "--skip-preflight",
     ]
     proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    pool_a_file = state_dir / "10.0.0.1" / "a_backends.txt"
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        if pool_a_file.exists() and pool_a_file.read_text().strip():
-            break
-        time.sleep(0.5)
-    proc.send_signal(signal.SIGINT)
-    proc.wait(timeout=15)
-    assert pool_a_file.read_text().strip(), "expected attach into pool a"
-    pool_b_file = state_dir / "10.0.0.1" / "b_backends.txt"
-    assert (not pool_b_file.exists()) or (not pool_b_file.read_text().strip()), (
-        "expected nothing in pool b"
-    )
+    # F7: always clean up on test failure.
+    try:
+        pool_a_file = state_dir / "10.0.0.1" / "a_backends.txt"
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            if pool_a_file.exists() and pool_a_file.read_text().strip():
+                break
+            time.sleep(0.5)
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=15)
+        assert pool_a_file.read_text().strip(), "expected attach into pool a"
+        pool_b_file = state_dir / "10.0.0.1" / "b_backends.txt"
+        assert (not pool_b_file.exists()) or (not pool_b_file.read_text().strip()), (
+            "expected nothing in pool b"
+        )
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+        _force_cleanup_vctl_serve_for_path(bin_dir)
 
 
 # ---------------------------------------------------------------------------

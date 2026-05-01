@@ -148,6 +148,15 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
 
     lb_scaling._do_add(ep, mgr, bs, pool_name=pool.name)
     state["attached"] = True
+
+    # F8: PPID watchdog — detect orphan parent (PPID==1 means the launching shell
+    # died and init reaped the parent).  Check every ~10 iterations of the 0.5s
+    # poll loop (≈5s resolution) and trigger the same drain+kill shutdown path
+    # as SIGTERM.  Opt-out: VCTL_NO_PPID_WATCHDOG=1 (for containers where
+    # PPID=1 is legitimate, e.g. processes run directly under tini/init).
+    _watchdog_enabled = os.environ.get("VCTL_NO_PPID_WATCHDOG", "0") not in ("1", "true", "yes")
+    _watchdog_tick = 0
+
     # Poll with a short timeout so Python signal handlers can fire between iterations.
     while True:
         try:
@@ -155,6 +164,18 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
             return rc_code
         except subprocess.TimeoutExpired:
             pass  # loop back; pending signal handlers run during the sleep in wait()
+
+        # F8: check PPID every ~10 poll ticks (≈5 s).
+        if _watchdog_enabled:
+            _watchdog_tick += 1
+            if _watchdog_tick >= 10:
+                _watchdog_tick = 0
+                if os.getppid() == 1:
+                    _LOG.warning(
+                        "PPID==1: launching shell appears to have died; "
+                        "triggering graceful drain+shutdown"
+                    )
+                    _shutdown(signal.SIGTERM, None)
 
 
 _READY_TIMEOUT_DEFAULT = 1800

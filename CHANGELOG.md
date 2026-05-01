@@ -3,6 +3,46 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.3] - 2026-05-01
+
+Hotfix release picking up F9 (already on main since ea6cfb0) plus three new
+fixes: subprocess teardown hardening (F7), PPID watchdog self-exit (F8), and
+multi-process haproxy reload/stop safety (F10).
+
+### Fixed
+- **F9 — `lb reload` stale config (backport bump):** `LbManager.reload()` now
+  re-renders `cluster.yaml` + state into `haproxy.cfg` before calling
+  `haproxy -sf`. Previously, editing `cluster.yaml` and then running
+  `vctl lb reload` silently re-executed haproxy on the stale on-disk file; the
+  new config was only picked up after a full stop+start cycle. (Commit ea6cfb0
+  landed on main before this version bump; this entry records the release.)
+- **F7 — `vctl serve` test teardown:** `tests/conftest.py` gains
+  `_force_cleanup_vctl_serve_for_path(stub_path)` — a helper that SIGKILLs any
+  vctl-serve or fake-vllm orphan whose cmdline references a pytest temp path.
+  A session-scoped autouse fixture (`_sweep_leaked_vctl_serve_at_session_end`)
+  sweeps any such orphans at the end of the full pytest run. Matching is
+  restricted to `/tmp/pytest-of-*` and `/tmp/tmp*` paths so production serve
+  processes are never touched. All subprocess-spawning tests in
+  `test_commands_serve.py` now wrap their bodies in `try/finally` that calls
+  the cleanup helper and kills the subprocess on assertion failure.
+- **F8 — `vctl serve` PPID watchdog:** after attaching to the LB pool, the
+  idle-poll loop checks `os.getppid() == 1` every ~10 iterations (~5 s). When
+  the launching shell has been reaped by init, this condition fires and runs the
+  same drain+kill_tree shutdown path as SIGTERM (drain LB, wait for idle, remove
+  from pool, SIGTERM→SIGKILL vllm, exit 0). Opt-out:
+  `VCTL_NO_PPID_WATCHDOG=1` (default ON). Watchdog is disabled in all subprocess
+  tests to avoid false triggers in CI containers where PPID may legitimately be 1.
+- **F10 — `_find_haproxy_pid_by_cfg` multi-process safety:** new
+  `_find_all_haproxy_pids_by_cfg(cfg_path) -> list[int]` returns all haproxy
+  processes sharing a cfg, sorted oldest-first by `create_time`.
+  `_find_haproxy_pid_by_cfg` now returns the **youngest** match (the one
+  currently bound to the cfg; older siblings are mid-drain reload orphans).
+  `stop()` SIGTERMs all matched PIDs with a shared 10 s deadline and SIGKILL
+  escalation per survivor (no multiplied timeouts). `reload()` builds the `-sf`
+  argument from the full PID list (`-sf 100 200 300`) so a new haproxy takes
+  over from all stacked processes in a single reload, preventing the reload-race
+  stack accumulation.
+
 ## [0.2.2] - 2026-05-02
 
 Hotfix release. v0.2.1 surfaced two real-world issues during smoke testing

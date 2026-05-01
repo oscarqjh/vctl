@@ -20,11 +20,11 @@
 - [ ] F5: optional: emit `daemon` directive in render.py + redirect stdout log to a file
   so we get both pidfile AND captured logs. Tradeoff: tmux pane closes immediately, lose
   interactive `tmux attach`. Probably not worth — F1 already covers status/stop.
-- [ ] F7: tests/test_commands_serve.py leaks orphan `vctl serve` subprocesses on test
+- [x] F7: tests/test_commands_serve.py leaks orphan `vctl serve` subprocesses on test
   failure / abnormal exit. Two zombies discovered after smoke (PIDs 2528733, 3630356,
   19h+10h old). Add try/finally + force-kill helper analogous to F3's
   `_force_cleanup_haproxy_for_cfg`, keyed on the test's stub-vllm path.
-- [ ] F8: `vctl serve` should detect orphan parent (PPID==1 = init reaped original parent)
+- [x] F8: `vctl serve` should detect orphan parent (PPID==1 = init reaped original parent)
   and self-exit cleanly: drain the LB attachment, kill_tree the vllm child, exit. Add a
   watchdog loop in the post-attach idle wait; check `os.getppid() == 1` every poll cycle
   (e.g. every 10s). Otherwise long-running serve invocations linger forever after the
@@ -32,7 +32,7 @@
 - [x] F9: `lb reload` did not re-render cfg from cluster.yaml — silently re-execed haproxy
   on the stale on-disk file. `cluster.yaml` edits were not picked up until a stop+start
   cycle. Fixed: render_config + write cfg_path before precheck (commit pending).
-- [ ] F10: `_find_haproxy_pid_by_cfg` returns first match only; if two haproxy processes
+- [x] F10: `_find_haproxy_pid_by_cfg` returns first match only; if two haproxy processes
   share the cfg path (e.g. from a back-to-back reload race), each `lb reload` -sf's the
   older one repeatedly while the newer ones stack. Either return all matching PIDs and
   `-sf p1,p2,...`, or pick the youngest by start_time.

@@ -109,42 +109,59 @@ class LbManager:
         long-running process (it's session-detached from tmux). Use the
         pidfile to send SIGTERM directly, poll for exit with SIGKILL fallback,
         then clean up the tmux session, pidfile, and admin socket.
+
+        F10: when multiple haproxy processes share the cfg path (reload race),
+        SIGTERM all of them oldest-first, then poll each for exit with a shared
+        10 s deadline, and SIGKILL any survivors.
         """
-        # 1. SIGTERM the haproxy pid (pidfile if present, else pgrep fallback for
-        # foreground haproxy that never wrote a pidfile).
-        pid: int | None = None
+        # 1. Collect all haproxy PIDs: pidfile entry + pgrep fallback.
+        pids: list[int] = []
         if self.pid_path.exists():
             try:
                 raw = self.pid_path.read_text().strip()
                 if raw:
-                    pid = int(raw.split()[0])
+                    pids.append(int(raw.split()[0]))
             except (ValueError, OSError) as e:
                 _LOG.warning("could not read pidfile %s: %s", self.pid_path, e)
-        if pid is None:
-            pid = _find_haproxy_pid_by_cfg(self.cfg_path)
-            if pid is not None:
-                _LOG.info("pidfile missing; located haproxy via cfg-path scan: pid=%d", pid)
-        if pid is not None:
+        # F10: find ALL matching haproxy processes (sorted oldest-first).
+        all_found = _find_all_haproxy_pids_by_cfg(self.cfg_path)
+        for p in all_found:
+            if p not in pids:
+                pids.append(p)
+                _LOG.info(
+                    "pidfile missing or incomplete; located haproxy via cfg-path scan: pid=%d",
+                    p,
+                )
+
+        # SIGTERM all (oldest-first order maintained from _find_all_haproxy_pids_by_cfg).
+        for pid in pids:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.kill(pid, signal.SIGTERM)
                 _LOG.info("sent SIGTERM to haproxy pid=%d", pid)
 
-        # B3: Poll for exit up to 10s; SIGKILL fallback if still alive.
-        if pid is not None:
+        # B3: Poll for exit up to 10s (shared deadline across all pids); SIGKILL survivors.
+        if pids:
             deadline = time.monotonic() + 10.0
-            while time.monotonic() < deadline:
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    break
-                except PermissionError:
-                    break
-                time.sleep(0.5)
-            else:
+            remaining = list(pids)
+            while remaining and time.monotonic() < deadline:
+                still_alive = []
+                for pid in remaining:
+                    try:
+                        os.kill(pid, 0)
+                        still_alive.append(pid)
+                    except (ProcessLookupError, PermissionError):
+                        pass  # gone
+                remaining = still_alive
+                if remaining:
+                    time.sleep(0.5)
+            for pid in remaining:
                 # Still alive after 10s — escalate to SIGKILL.
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.kill(pid, signal.SIGKILL)
-                    _LOG.warning("haproxy pid=%d did not exit after SIGTERM; sent SIGKILL", pid)
+                    _LOG.warning(
+                        "haproxy pid=%d did not exit after SIGTERM; sent SIGKILL", pid
+                    )
+            if remaining:
                 time.sleep(0.2)
 
         # B3/B4: unlink pidfile and admin socket AFTER process is gone.
@@ -159,18 +176,20 @@ class LbManager:
         tmux_kill(self.tmux_name)
 
     def reload(self) -> None:
-        # Resolve current pid: pidfile if present, else pgrep fallback.
-        current_pid: int | None = None
+        # F10: collect ALL haproxy pids sharing this cfg so we can -sf them all.
+        # Pidfile entry is included first; pgrep scan adds any extras.
+        current_pids: list[int] = []
         if self.pid_path.exists():
             try:
                 raw = self.pid_path.read_text().strip()
                 if raw:
-                    current_pid = int(raw.split()[0])
+                    current_pids.append(int(raw.split()[0]))
             except (ValueError, OSError):
-                current_pid = None
-        if current_pid is None:
-            current_pid = _find_haproxy_pid_by_cfg(self.cfg_path)
-        if current_pid is None:
+                pass
+        for p in _find_all_haproxy_pids_by_cfg(self.cfg_path):
+            if p not in current_pids:
+                current_pids.append(p)
+        if not current_pids:
             raise RuntimeError(
                 f"no running haproxy found (pidfile={self.pid_path}, "
                 f"cfg={self.cfg_path}); is it running?"
@@ -193,7 +212,10 @@ class LbManager:
         if pre.returncode != 0:
             raise RuntimeError("haproxy config syntax error:\n" + pre.stderr)
 
-        # Reload with stdout/stderr captured; surface failures.
+        # F10: pass ALL current pids to -sf (space-separated); haproxy will
+        # gracefully drain each old process and take over from all of them.
+        # This prevents a reload-race from stacking haproxy processes.
+        sf_args = [str(p) for p in current_pids]
         result = subprocess.run(
             [
                 binary,
@@ -202,7 +224,7 @@ class LbManager:
                 "-p",
                 str(self.pid_path),
                 "-sf",
-                str(current_pid),
+                *sf_args,
             ],
             capture_output=True,
             text=True,
@@ -278,17 +300,18 @@ class LbManager:
         }
 
 
-def _find_haproxy_pid_by_cfg(cfg_path: Path) -> int | None:
-    """Locate a running haproxy process whose cmdline includes `-f <cfg_path>`.
+def _find_all_haproxy_pids_by_cfg(cfg_path: Path) -> list[int]:
+    """Return ALL haproxy PIDs whose cmdline includes ``-f <cfg_path>``.
 
-    Used as a fallback when the pidfile is missing/empty — haproxy without the
-    `daemon` directive runs in the foreground and never writes the `-p` pidfile,
-    so we have to discover the PID by scanning processes.
+    Results are sorted by ``psutil.Process.create_time()`` oldest-first.
+    This covers the case where a back-to-back reload race has left multiple
+    haproxy processes all pointing at the same config file.
     """
     import psutil
 
     target = str(cfg_path)
-    for proc in psutil.process_iter(["name", "cmdline"]):
+    matches: list[tuple[float, int]] = []  # (create_time, pid)
+    for proc in psutil.process_iter(["name", "cmdline", "create_time"]):
         try:
             cmd = proc.info.get("cmdline") or []
             if not cmd:
@@ -299,10 +322,30 @@ def _find_haproxy_pid_by_cfg(cfg_path: Path) -> int | None:
                 continue
             for i, tok in enumerate(cmd):
                 if tok == "-f" and i + 1 < len(cmd) and cmd[i + 1] == target:
-                    return int(proc.pid)
+                    ct = proc.info.get("create_time") or 0.0
+                    matches.append((ct, int(proc.pid)))
+                    break
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    return None
+    matches.sort(key=lambda x: x[0])  # oldest first
+    return [pid for _, pid in matches]
+
+
+def _find_haproxy_pid_by_cfg(cfg_path: Path) -> int | None:
+    """Locate a running haproxy process whose cmdline includes ``-f <cfg_path>``.
+
+    Returns the YOUNGEST (most recently created) match — that is the process
+    currently bound to the cfg and accepting traffic; older siblings are
+    mid-shutdown orphans from reload races.
+
+    Used as a fallback when the pidfile is missing/empty — haproxy without the
+    ``daemon`` directive runs in the foreground and never writes the ``-p``
+    pidfile, so we have to discover the PID by scanning processes.
+    """
+    pids = _find_all_haproxy_pids_by_cfg(cfg_path)
+    if not pids:
+        return None
+    return pids[-1]  # youngest last (sorted oldest-first)
 
 
 def _verify_pid_is_haproxy(pid: int) -> bool:
