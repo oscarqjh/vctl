@@ -23,7 +23,7 @@ def test_init_config_creates_files(tmp_path: Path) -> None:
     proc = _vctl("init-config", "--dir", str(tmp_path))
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "cluster.yaml").exists()
-    for name in ("qwen3_5-9b", "qwen3-vl-30b-a3b", "qwen3-vl-9b"):
+    for name in ("qwen3_5-9b", "qwen3-vl-30b-a3b"):
         assert (tmp_path / "models" / f"{name}.yaml").exists()
 
 

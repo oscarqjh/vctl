@@ -15,7 +15,7 @@ def _build_subparser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="overwrite existing files")
     p.add_argument(
         "--profiles",
-        default="qwen3_5-9b,qwen3-vl-30b-a3b,qwen3-vl-9b",
+        default="qwen3_5-9b,qwen3-vl-30b-a3b",
         help="comma-separated profile names to scaffold",
     )
     return p

@@ -21,17 +21,17 @@ kind: Cluster
 
 # Default profile loaded when --profile is not passed.
 # Lookup order: --profile > VCTL_PROFILE > MODEL_PROFILE > this field.
-profile: qwen3_5-9b
+profile: qwen3-vl-30b-a3b
 
 cluster:
   # Path to the venv containing the vllm binary. `<venv>/bin` is prepended
   # to $PATH before the serve subprocess is spawned.
-  venv: /opt/vllm-venv
+  venv: /mnt/umm/users/qianjianheng/workspace/vllm_test/.venv_0_19_2rc1
 
   # Shared FS directory for the atomic backend-state file
   # (`<lb.host>_backends.txt`). Must be writable by every pod that
   # calls `vctl lb add`, `attach`, etc. flock-based mutual exclusion.
-  state_dir: /tmp/vctl-state
+  state_dir: /mnt/aigc/users/qianjianheng/.vllm-lb-state
 
   # Cluster-wide env vars merged into the vllm subprocess.
   # `profile.env` wins on conflicts.
@@ -43,7 +43,7 @@ lb:
 
   # IP of the pod that runs haproxy. `vctl lb start` refuses unless
   # this pod's detected IP matches (override with --force).
-  host: 10.0.0.1
+  host: 10.119.30.181
 
   # Client-facing listener (what your app/curl hits).
   client:
@@ -174,41 +174,7 @@ env:
   VLLM_ENGINE_READY_TIMEOUT_S: 3000
 """
 
-QWEN3_VL_9B_PROFILE = """\
-# vctl profile: Qwen3-VL-9B (dense multimodal)
-# Schema version: vctl/v1
-
-apiVersion: vctl/v1
-kind: Profile
-
-model:
-  name: Qwen/Qwen3-VL-9B
-  served_as: qwen3-vl-9b
-
-resources:
-  num_gpus: 8
-  cuda_visible_devices: "0,1,2,3,4,5,6,7"
-
-parallelism:
-  data_parallel: 4
-  tensor_parallel: 2
-  api_server_count: 4
-
-server:
-  http_port: 8000
-
-vllm_args:
-  mm-encoder-tp-mode: data
-  mm-processor-cache-type: shm
-  reasoning-parser: qwen3
-  enable-prefix-caching: true
-
-env:
-  VLLM_ENGINE_READY_TIMEOUT_S: 1800
-"""
-
 PROFILE_TEMPLATES: dict[str, str] = {
     "qwen3_5-9b": QWEN3_5_9B_PROFILE,
     "qwen3-vl-30b-a3b": QWEN3_VL_30B_A3B_PROFILE,
-    "qwen3-vl-9b": QWEN3_VL_9B_PROFILE,
 }

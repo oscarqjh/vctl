@@ -42,7 +42,6 @@ vctl init-config
 #   ./cluster.yaml
 #   ./models/qwen3_5-9b.yaml
 #   ./models/qwen3-vl-30b-a3b.yaml
-#   ./models/qwen3-vl-9b.yaml
 ```
 
 Every field is documented inline. Edit `cluster.yaml` to set `lb.host`, `cluster.venv`, and `cluster.state_dir` for your environment, then pick a profile as your default.
@@ -53,7 +52,7 @@ Options:
 |---|---|
 | `--dir <path>` | Write files into `<path>` instead of the current directory. |
 | `--force` | Overwrite existing files without prompting. |
-| `--profiles a,b,c` | Scaffold only the named profiles (default: all three). |
+| `--profiles a,b,c` | Scaffold only the named profiles (default: all built-in). |
 
 Example — scaffold only one profile into a new directory:
 
@@ -61,7 +60,7 @@ Example — scaffold only one profile into a new directory:
 vctl init-config --dir /opt/myconfig --profiles qwen3_5-9b
 ```
 
-Available built-in profiles: `qwen3_5-9b`, `qwen3-vl-30b-a3b`, `qwen3-vl-9b`.
+Available built-in profiles: `qwen3_5-9b`, `qwen3-vl-30b-a3b`.
 
 ### 1. Write a cluster config (manual alternative)
 
