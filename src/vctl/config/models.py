@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from typing import Annotated, Any, Literal
 
@@ -39,6 +40,26 @@ class LbClient(_Strict):
 
 class LbAdmin(_Strict):
     bind_port: _Port
+    bind_addr: str = Field(
+        default="0.0.0.0",
+        description=(
+            "IPv4 address to bind the HAProxy admin TCP socket. "
+            "Default 0.0.0.0 preserves cross-host vctl scaling behaviour. "
+            "Set to 127.0.0.1 to restrict the admin socket to the LB host only — "
+            "tighter security but requires running scaling commands on the LB host "
+            "(e.g. via SSH/tmux)."
+        ),
+    )
+
+    # E1: validate bind_addr is a valid IPv4 address
+    @field_validator("bind_addr", mode="after")
+    @classmethod
+    def _valid_ipv4(cls, v: str) -> str:
+        try:
+            ipaddress.IPv4Address(v)
+        except ValueError as exc:
+            raise ValueError(f"bind_addr must be a valid IPv4 address, got {v!r}") from exc
+        return v
 
 
 class LbStats(_Strict):

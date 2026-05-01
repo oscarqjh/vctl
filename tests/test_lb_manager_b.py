@@ -60,7 +60,7 @@ def test_start_raises_when_already_running(
 @patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.1")
 @patch("vctl.lb.manager.tmux_session_exists", return_value=False)
 @patch("vctl.lb.manager.socket.create_connection", side_effect=OSError)
-@patch("vctl.lb.manager.tmux_run_detached")
+@patch("vctl.lb.manager.tmux_run_detached_argv")
 @patch("vctl.lb.manager.ensure_haproxy", return_value="/usr/bin/haproxy")
 @patch("vctl.lb.manager._verify_pid_is_haproxy", return_value=True)
 def test_start_force_calls_stop_then_starts(
@@ -90,7 +90,7 @@ def test_start_force_calls_stop_then_starts(
 
     mgr.start(force=True)
     assert stop_called, "stop() must be called when force=True and already running"
-    assert mock_tmux_run.called, "tmux_run_detached must be called after stop()"
+    assert mock_tmux_run.called, "tmux_run_detached_argv must be called after stop()"
 
 
 # ---------------------------------------------------------------------------

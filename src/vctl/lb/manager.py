@@ -15,7 +15,12 @@ from vctl.config.models import LbHaproxy
 from vctl.lb.installer import ensure_haproxy
 from vctl.lb.render import RuntimePaths, render_haproxy_cfg
 from vctl.lb.state import BackendState
-from vctl.platform import detect_self_ip, tmux_kill, tmux_run_detached, tmux_session_exists
+from vctl.platform import (
+    detect_self_ip,
+    tmux_kill,
+    tmux_run_detached_argv,
+    tmux_session_exists,
+)
 
 _LOG = logging.getLogger(__name__)
 _TMUX_NAME = "vctl-lb"
@@ -69,11 +74,23 @@ class LbManager:
                 f"refusing to start LB: self_ip={self_ip} but lb.host={self.lb.host}; "
                 "pass --force to override"
             )
+
+        # E1: warn when admin socket is bound on all interfaces with level admin
+        if self.lb.admin.bind_addr == "0.0.0.0":
+            _LOG.warning(
+                "HAProxy admin socket bound on 0.0.0.0:%d with level admin — "
+                "ensure this port is firewalled or set lb.admin.bind_addr to 127.0.0.1",
+                self.lb.admin.bind_port,
+            )
+
         cfg = self.render_config()
         self.cfg_path.write_text(cfg)
         binary = ensure_haproxy()
-        cmd = f"{binary} -f {self.cfg_path} -p {self.pid_path}"
-        tmux_run_detached(_TMUX_NAME, cmd)
+        # E3: use argv form so paths with spaces are quoted correctly
+        tmux_run_detached_argv(
+            _TMUX_NAME,
+            [binary, "-f", str(self.cfg_path), "-p", str(self.pid_path)],
+        )
         _LOG.info("haproxy started in tmux session %s", _TMUX_NAME)
 
     def stop(self) -> None:
@@ -208,6 +225,7 @@ class LbManager:
             "admin_reachable": admin_reachable,
             "tmux_managed": tmux_managed,
             "cfg_path": str(self.cfg_path),
+            "admin_bind": f"{self.lb.admin.bind_addr}:{self.lb.admin.bind_port}",
         }
 
 

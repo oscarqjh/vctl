@@ -59,9 +59,9 @@
 - [x] D13: yaml duplicate-key tolerance — custom SafeLoader that errors on duplicates (yaml_source.py:11-16)
 
 ### Commit E — security
-- [ ] E1: HAProxy admin TCP socket bound `*:9001` with `level admin`, no ACL → LAN takeover. Bind to 127.0.0.1 OR add ACL src netmask OR doc loudly (render.py:60-61)
-- [ ] E2: source-build haproxy install no SHA256/PGP verification (installer.py:50-55)
-- [ ] E3: `tmux_run_detached` shell-quoting: validate session name regex `^[A-Za-z0-9_.-]+$`; shlex.quote cmd components (platform.py:36-40)
+- [x] E1: HAProxy admin TCP socket bound `*:9001` with `level admin`, no ACL → LAN takeover. Bind to 127.0.0.1 OR add ACL src netmask OR doc loudly (render.py:60-61)
+- [x] E2: source-build haproxy install no SHA256/PGP verification (installer.py:50-55)
+- [x] E3: `tmux_run_detached` shell-quoting: validate session name regex `^[A-Za-z0-9_.-]+$`; shlex.quote cmd components (platform.py:36-40)
 
 ## Up next (post-v0.1.0)
 - Prometheus metrics endpoint (`vctl lb metrics`)

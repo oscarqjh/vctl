@@ -5,6 +5,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Se
 
 ## [Unreleased]
 
+### Security (v0.2.1 hardening — Commit E)
+- **E1 — HAProxy admin socket bind address (`lb.admin.bind_addr`):** New optional field on
+  `LbAdmin` (default `"0.0.0.0"` for backwards compatibility). Set to `"127.0.0.1"` to
+  restrict the admin TCP socket to the LB host only. `manager.start()` now emits a WARNING
+  when the socket is bound on `0.0.0.0` with `level admin`. The rendered haproxy.cfg now
+  always uses an explicit IPv4 (e.g. `0.0.0.0:9001`) rather than the legacy `*:9001`
+  shorthand. `lb status` output includes the `admin_bind` field.
+- **E2 — Source-build SHA256 pinning:** The haproxy installer now downloads tarballs to
+  memory via httpx, verifies SHA256 against a per-version pin table before writing to disk,
+  and refuses to build unknown versions unless `VCTL_INSTALLER_INSECURE=1` is set.
+- **E3 — tmux session name validation + argv quoting:** `tmux_run_detached`, `tmux_kill`,
+  and `tmux_session_exists` now validate the session name against `[A-Za-z0-9_.-]+` and
+  raise `ValueError` on invalid names. All three raise `RuntimeError("tmux not installed")`
+  when tmux is not on PATH. New `tmux_run_detached_argv(name, argv)` helper uses
+  `shlex.join` for safe composition from path components. `manager.start()` migrated to the
+  argv form.
+
+### Removed
+- `./cluster.yaml` (cwd) and `~/vctl-cfg/cluster.yaml` (legacy home) config fallbacks.
+  Resolution is now explicit: `--config` flag, `CLUSTER_CONFIG` env var, or `~/.vctl/cluster.yaml`.
+  Tests that relied on cwd-based discovery now pass `CLUSTER_CONFIG` explicitly.
+
 ## [0.2.0] - 2026-05-01
 
 ### Added

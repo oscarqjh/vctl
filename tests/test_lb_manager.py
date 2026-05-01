@@ -40,7 +40,7 @@ def test_start_refuses_on_wrong_host(mock_ip, tmp_path: Path) -> None:
     assert "10.0.0.1" in str(exc.value) and "10.0.0.2" in str(exc.value)
 
 
-@patch("vctl.lb.manager.tmux_run_detached")
+@patch("vctl.lb.manager.tmux_run_detached_argv")
 @patch("vctl.lb.manager.ensure_haproxy", return_value="/usr/bin/haproxy")
 @patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.2")
 def test_start_with_force_proceeds(mock_ip, mock_ens, mock_tmux, tmp_path: Path) -> None:

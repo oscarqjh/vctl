@@ -58,7 +58,7 @@ def render_haproxy_cfg(
         "global",
         "    log stdout format raw local0",
         f"    stats socket {paths.unix_socket} mode 660 level admin expose-fd listeners",
-        f"    stats socket ipv4@*:{lb.admin.bind_port} level admin",
+        f"    stats socket ipv4@{lb.admin.bind_addr}:{lb.admin.bind_port} level admin",
         "    stats timeout 30s",
         # Defaults
         "defaults",

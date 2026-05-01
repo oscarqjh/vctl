@@ -319,6 +319,50 @@ Another process holds the port. Either stop it or change `server.http_port` in t
 
 ---
 
+## Security
+
+### HAProxy admin socket
+
+By default the HAProxy admin TCP socket (used by `vctl lb add/remove/drain` from worker nodes)
+is bound on `0.0.0.0:<lb.admin.bind_port>` with `level admin`. Any host that can reach this
+port can take full control of the load balancer.
+
+**Risk:** In a network without a firewall this is a LAN takeover vector.
+
+**Recommended hardening:**
+
+Option A — firewall the admin port (keep cross-host scaling working):
+```bash
+# Allow only your vctl worker subnet; block everything else
+iptables -I INPUT -p tcp --dport 9001 ! -s 10.0.0.0/24 -j DROP
+```
+
+Option B — restrict to loopback (all `vctl lb` scaling commands must run on the LB host,
+e.g. via SSH or inside a tmux session on the LB node):
+```yaml
+# cluster.yaml
+lb:
+  admin:
+    bind_port: 9001
+    bind_addr: 127.0.0.1   # <-- add this line
+```
+
+When `bind_addr` is `0.0.0.0` (the default), `vctl lb start` will emit a WARNING reminding
+you to firewall the port or switch to `127.0.0.1`.
+
+### Source-build SHA pinning
+
+When `vctl lb install` falls back to building HAProxy from source, the tarball is downloaded
+via HTTPS, its SHA256 is verified against a pinned value before anything is written to disk,
+and the build is refused if the hash does not match or is unknown.
+
+To build a version not in the pinned set (not recommended):
+```bash
+VCTL_INSTALLER_INSECURE=1 vctl lb install
+```
+
+---
+
 ## Migration from bash prototype
 
 If you have an old `cluster.yaml` in the `multi_node_dp/` prototype format:
