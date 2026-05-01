@@ -215,16 +215,26 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
     admin_query_failed = False
 
     if lb_running:
-        cli = _client(mgr)
-        if cli is None:
+        # HAProxy admin socket closes after each command, so each `show ...`
+        # needs its own RuntimeClient. Reusing one across two queries was
+        # masking live-registry as "tracked-only" (the second send hit a
+        # closed socket and raised, but haproxy_stats had already populated).
+        cli1 = _client(mgr)
+        if cli1 is None:
             admin_query_failed = True
         else:
             try:
-                haproxy_stats = _fetch_haproxy_stats(cli)
-                live_registry = _build_live_registry(cli)
+                haproxy_stats = _fetch_haproxy_stats(cli1)
             except Exception as exc:
-                _LOG.debug("haproxy stats query raised: %s", exc)
+                _LOG.debug("haproxy show stat raised: %s", exc)
                 admin_query_failed = True
+            cli2 = _client(mgr)
+            if cli2 is not None:
+                try:
+                    live_registry = _build_live_registry(cli2)
+                except Exception as exc:
+                    _LOG.debug("haproxy show servers state raised: %s", exc)
+                    admin_query_failed = True
 
     if admin_query_failed:
         console.print(
@@ -282,7 +292,7 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
         table.add_column("qcur", justify="right")
         table.add_column("running", justify="right")
         table.add_column("waiting", justify="right")
-        table.add_column("last-check", justify="right")
+        table.add_column("uptime", justify="right")
 
         total_scur = 0
         total_qcur = 0
@@ -327,8 +337,10 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
             if qcur_val is not None:
                 total_qcur += qcur_val
 
-            # lastchg: seconds since last health probe.
-            lastchg_str = f"{lastchg_val}s" if lastchg_val is not None else "--"
+            # lastchg: seconds since last UP↔DOWN transition (i.e. how long
+            # this backend has been continuously in its current state). For a
+            # healthy backend that's been up for a while, this is uptime.
+            lastchg_str = _format_duration(lastchg_val) if lastchg_val is not None else "--"
 
             # running / waiting from vllm /metrics.
             host_part, _, port_str = ep.rpartition(":")
@@ -366,6 +378,17 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
         )
 
     return 0
+
+
+def _format_duration(seconds: int) -> str:
+    """Format seconds as a compact human-readable duration. e.g. 3569 -> '59m'."""
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60}m"
+    return f"{seconds // 86400}d{(seconds % 86400) // 3600}h"
 
 
 def _fetch_haproxy_stats(cli: object) -> dict[str, dict[str, dict[str, int | str]]]:

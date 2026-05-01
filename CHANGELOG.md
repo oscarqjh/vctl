@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.5] - 2026-05-02
+
+### Fixed
+- **`vctl lb info` live registry false-negative:** every backend was annotated
+  `⚠ tracked-only` even when haproxy was actively forwarding traffic. Root
+  cause: `RuntimeClient` reuses a single socket, but the haproxy admin socket
+  closes after each command — the second `_send` (for `show servers state`)
+  hit a closed socket and raised, while `show stat` (run first) had already
+  populated. Now each `show ...` query opens its own client.
+- **`uptime` column (was `last-check`):** the value `lastchg` is *seconds since
+  the last UP↔DOWN transition*, not "seconds since the last health probe".
+  For a healthy backend that's been stable, it grows continuously and looked
+  alarming (`3569s`). Renamed to `uptime` and formatted compactly (`1h4m`,
+  `2d3h`) so it reads as the backend's continuous-up time at a glance.
+
 ## [0.2.4] - 2026-05-02
 
 **BREAKING**: `vctl lb status`, `vctl lb stats`, and `vctl lb list` have been removed.
