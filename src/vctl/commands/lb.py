@@ -94,12 +94,28 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         return 0
     if verb == "list":
         pools = mgr.lb.pools
+        # Detect LB liveness so we can annotate state-file content correctly.
+        # When LB is up: state file == live haproxy pool (per add/remove sync).
+        # When LB is down: state file is the persistent registry for the
+        # next `lb start` + `auto-add`. Backends shown are NOT actually
+        # serving traffic. Annotate to avoid confusion.
+        st = mgr.status()
+        lb_running = bool(st.get("running"))
+        if not lb_running:
+            print(
+                "WARNING: LB is not running. The entries below are persisted "
+                "registrations from the state file — they are NOT serving "
+                "traffic right now. Run `vctl lb start` to bring them back."
+            )
+            print()
+
         found_any = False
         for pool in pools:
             pbs = BackendState(bs.state_dir, bs.lb_host, pool=pool.name)
             eps = pbs.list()
             url = f"http://{mgr.lb.host}:{pool.bind_port}"
-            print(f"pool: {pool.name} ({pool.served_model}) — {url}")
+            suffix = "" if lb_running else "  [LB STOPPED]"
+            print(f"pool: {pool.name} ({pool.served_model}) — {url}{suffix}")
             if eps:
                 for ep in eps:
                     print(f"  {ep}")
