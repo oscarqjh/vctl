@@ -64,7 +64,11 @@ def test_lb_list_groups_by_pool(tmp_path: Path) -> None:
         "lb",
         "list",
         cwd=repo,
-        env={**os.environ, "VCTL_CLUSTER__STATE_DIR": str(state)},
+        env={
+            **os.environ,
+            "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
+            "VCTL_CLUSTER__STATE_DIR": str(state),
+        },
     )
     assert proc.returncode == 0
     out = proc.stdout
@@ -83,7 +87,11 @@ def test_lb_list_empty_pools(tmp_path: Path) -> None:
         "lb",
         "list",
         cwd=repo,
-        env={**os.environ, "VCTL_CLUSTER__STATE_DIR": str(state)},
+        env={
+            **os.environ,
+            "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
+            "VCTL_CLUSTER__STATE_DIR": str(state),
+        },
     )
     assert proc.returncode == 0
     out = proc.stdout
@@ -108,7 +116,11 @@ def test_lb_health_groups_by_pool(tmp_path: Path) -> None:
         "lb",
         "health",
         cwd=repo,
-        env={**os.environ, "VCTL_CLUSTER__STATE_DIR": str(state)},
+        env={
+            **os.environ,
+            "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
+            "VCTL_CLUSTER__STATE_DIR": str(state),
+        },
     )
     # Probe on port 1 will fail → unhealthy count > 0 → exit 1
     assert proc.returncode == 1
@@ -125,7 +137,11 @@ def test_lb_health_no_backends_ok(tmp_path: Path) -> None:
         "lb",
         "health",
         cwd=repo,
-        env={**os.environ, "VCTL_CLUSTER__STATE_DIR": str(state)},
+        env={
+            **os.environ,
+            "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
+            "VCTL_CLUSTER__STATE_DIR": str(state),
+        },
     )
     assert proc.returncode == 0
 
@@ -148,6 +164,7 @@ def test_lb_wait_ready_pool_filter_unknown(tmp_path: Path) -> None:
         cwd=repo,
         env={
             **os.environ,
+            "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
             "VCTL_CLUSTER__STATE_DIR": str(state),
             "LB_WAIT_TIMEOUT": "1",
         },
@@ -169,11 +186,12 @@ def test_lb_wait_ready_no_backends_times_out(tmp_path: Path) -> None:
         cwd=repo,
         env={
             **os.environ,
+            "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
             "VCTL_CLUSTER__STATE_DIR": str(state),
             "LB_WAIT_TIMEOUT": "1",
         },
         timeout=5,
     )
     # No backends in any pool — nothing is "all_ok and any_pool_has_backends"
-    # so it loops until timeout.
-    assert proc.returncode == 1
+    # so it loops until timeout.  C8: environment timeout → exit 4.
+    assert proc.returncode == 4

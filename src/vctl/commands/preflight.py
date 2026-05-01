@@ -13,8 +13,19 @@ from vctl.resolver import resolve
 
 
 def _build_subparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="vctl preflight")
-    p.add_argument("--json", action="store_true")
+    p = argparse.ArgumentParser(
+        prog="vctl preflight",
+        description=(
+            "Run sanity checks before launching a vllm inference server:\n"
+            "  gpus      — nvidia-smi present (or num_gpus=0)\n"
+            "  shm       — /dev/shm ≥ 8 GB\n"
+            "  venv      — cluster.venv path exists\n"
+            "  lb_route  — TCP connection to lb.host:pool.bind_port succeeds\n"
+            "\n"
+            "Exit 0 when all checks pass, exit 4 when any check fails.\n"
+        ),
+    )
+    p.add_argument("--json", action="store_true", help="Emit results as JSON")
     return p
 
 
@@ -63,4 +74,4 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         for name, ok, msg in checks:
             mark = "OK" if ok else "FAIL"
             print(f"[{mark}] {name}: {msg}")
-    return 0 if all(c["ok"] for c in payload["checks"]) else 3
+    return 0 if all(c["ok"] for c in payload["checks"]) else 4  # C8: environment error → exit 4

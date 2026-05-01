@@ -16,6 +16,7 @@ def test_lb_health_ok_when_all_healthy(tmp_path: Path) -> None:
     (tmp_path / "models" / "qwen3-9b.yaml").write_text((FIX / "sample_profile.yaml").read_text())
     env = {
         **os.environ,
+        "CLUSTER_CONFIG": str(tmp_path / "cluster.yaml"),
         "VCTL_CLUSTER__STATE_DIR": str(tmp_path / "state"),
         "VCTL_TEST_PROBE_RESULT": "ok",
     }

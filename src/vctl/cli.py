@@ -34,20 +34,16 @@ _CONFIG_SENTINEL = "<auto>"
 # Default home location for `uv tool install`-ed users.
 _VCTL_HOME = Path.home() / ".vctl"
 _CONFIG_DEFAULT_HOME = _VCTL_HOME / "cluster.yaml"
-_CONFIG_LEGACY_HOME = Path.home() / "vctl-cfg" / "cluster.yaml"  # pre-unification
 
 
 def _resolve_config_path(cli_arg: str | None) -> str:
     """Pick which cluster.yaml to load.
 
-    Order:
+    Order (only three sources, no implicit fallbacks):
       1. --config flag
       2. CLUSTER_CONFIG env var
-      3. ./cluster.yaml (cwd, back-compat for repo-local workflows)
-      4. ~/.vctl/cluster.yaml (canonical default — co-located with runtime
-         artifacts under ~/.vctl/lb/)
-      5. ~/vctl-cfg/cluster.yaml (legacy default before unification — kept
-         as a transparent BC fallback so existing setups keep working)
+      3. ~/.vctl/cluster.yaml (canonical default)
+
     Returns the chosen path even if it doesn't exist; let the loader raise
     a clear FileNotFoundError naming candidates that were tried.
     """
@@ -56,15 +52,6 @@ def _resolve_config_path(cli_arg: str | None) -> str:
     env = os.environ.get("CLUSTER_CONFIG")
     if env:
         return env
-    cwd_cfg = Path.cwd() / "cluster.yaml"
-    if cwd_cfg.is_file():
-        return str(cwd_cfg)
-    if _CONFIG_DEFAULT_HOME.is_file():
-        return str(_CONFIG_DEFAULT_HOME)
-    if _CONFIG_LEGACY_HOME.is_file():
-        return str(_CONFIG_LEGACY_HOME)
-    # Default to the canonical location (loader will produce a clear error
-    # naming all candidates).
     return str(_CONFIG_DEFAULT_HOME)
 
 
@@ -73,9 +60,7 @@ def _config_path_error_message() -> str:
         "could not find cluster.yaml. Searched (in order):\n"
         f"  --config flag (not provided)\n"
         f"  CLUSTER_CONFIG env (={os.environ.get('CLUSTER_CONFIG', '<unset>')})\n"
-        f"  {Path.cwd() / 'cluster.yaml'}\n"
-        f"  {_CONFIG_DEFAULT_HOME}  (canonical default)\n"
-        f"  {_CONFIG_LEGACY_HOME}  (legacy default — pre-v0.2.x)\n"
+        f"  {_CONFIG_DEFAULT_HOME}\n"
         f"\n"
         f"Run `vctl init-config` to bootstrap one at {_CONFIG_DEFAULT_HOME.parent}/."
     )
@@ -84,17 +69,38 @@ def _config_path_error_message() -> str:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vctl", description="Typed CLI for vLLM fleet.")
     p.add_argument("-V", "--version", action="version", version=f"vctl {__version__}")
-    p.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
-    p.add_argument("--log-format", default="pretty", choices=["pretty", "json"])
+    p.add_argument(
+        "--log-level",
+        default="info",
+        choices=["debug", "info", "warning", "error"],
+        help="Logging verbosity (default: info)",
+    )
+    p.add_argument(
+        "--log-format",
+        default="pretty",
+        choices=["pretty", "json"],
+        help=(
+            "Log output format: 'pretty' (human-readable) or "
+            "'json' (structured, for log shippers)"
+        ),
+    )
     p.add_argument(
         "--config",
         default=_CONFIG_SENTINEL,
         help=(
             "path to cluster.yaml "
-            "(default: $CLUSTER_CONFIG, ./cluster.yaml, or ~/vctl-cfg/cluster.yaml)"
+            "(default: $CLUSTER_CONFIG, then ~/.vctl/cluster.yaml)"
         ),
     )
-    p.add_argument("--profile", default=None)
+    p.add_argument(
+        "--profile",
+        default=None,
+        help=(
+            "Profile name to activate — resolves to <config_dir>/models/<name>.yaml. "
+            "Overrides the `profile:` field in cluster.yaml and the VCTL_PROFILE / "
+            "MODEL_PROFILE env vars."
+        ),
+    )
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for name in _COMMANDS:
         # add_help=False so `vctl <cmd> --help` passes --help through to the
@@ -154,13 +160,44 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(ns.command, rest, ns)
     except FileNotFoundError as e:
-        # If the missing file is the cluster.yaml we just resolved, augment
-        # the error message with the search list.
-        msg = str(e)
-        if "cluster.yaml" in msg:
-            _LOG.error("%s\n\n%s", msg, _config_path_error_message())
-        else:
-            _LOG.error("%s", e)
-        return 2
+        # C9: only return exit 2 (config error) when the missing file is the
+        # cluster.yaml that was just resolved (i.e. ns.config).  Any other
+        # FileNotFoundError is a runtime / environment error → log and re-raise
+        # so the caller sees the full traceback.
+        config_path = Path(ns.config).resolve()
+        if _missing_path_is_config(e, config_path):
+            msg = str(e)
+            if "cluster.yaml" in str(config_path):
+                _LOG.error("%s\n\n%s", msg, _config_path_error_message())
+            else:
+                _LOG.error("%s", msg)
+            return 2
+        _LOG.error("%s", e)
+        raise
     except KeyboardInterrupt:
         return 130
+
+
+def _missing_path_is_config(exc: FileNotFoundError, config_path: Path) -> bool:
+    """Return True if *exc* is about the *config_path* being missing.
+
+    Tries two methods:
+    1. ``exc.filename`` attribute (set by most open() implementations).
+    2. Parse the last field of the error message string.
+    """
+    # Method 1: filename attribute (most reliable).
+    if exc.filename is not None:
+        try:
+            if Path(exc.filename).resolve() == config_path:
+                return True
+        except Exception:
+            pass
+    # Method 2: parse from message string.
+    try:
+        msg = str(exc)
+        quoted = msg.rsplit(": ", 1)[-1].strip("'\"")
+        if quoted and Path(quoted).resolve() == config_path:
+            return True
+    except Exception:
+        pass
+    return False

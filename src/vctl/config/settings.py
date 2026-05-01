@@ -13,10 +13,30 @@ ENV_PREFIX = "VCTL_"
 ENV_DELIM = "__"
 
 
+# Top-level field names for each document type (lower-cased).
+# Only VCTL_* env vars whose first segment matches a known field are applied.
+# This prevents test-sentinel env vars (e.g. VCTL_TEST_NO_SOCKET) from
+# polluting the document dict and causing extra="forbid" validation errors.
+_CLUSTER_TOPLEVEL: frozenset[str] = frozenset(
+    {"apiversion", "kind", "cluster", "profile", "lb"}
+)
+_PROFILE_TOPLEVEL: frozenset[str] = frozenset(
+    {"apiversion", "kind", "model", "resources", "parallelism", "server", "vllm_args", "env"}
+)
+
+
 def _apply_env_overrides(
-    base: dict[str, Any], environ: dict[str, str] | None = None
+    base: dict[str, Any],
+    environ: dict[str, str] | None = None,
+    allowed_toplevel: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Overlay VCTL_* env vars with __ as nested key delimiter."""
+    """Overlay VCTL_* env vars with __ as nested key delimiter.
+
+    When *allowed_toplevel* is provided, only vars whose first key segment
+    appears in that set are applied — unknown top-level segments are ignored.
+    This prevents test-sentinel env vars such as ``VCTL_TEST_NO_SOCKET`` from
+    polluting the cluster dict and causing ``extra="forbid"`` validation errors.
+    """
     env = environ if environ is not None else os.environ
     out = dict(base)
     for raw_key, raw_val in env.items():
@@ -25,6 +45,8 @@ def _apply_env_overrides(
         key = raw_key[len(ENV_PREFIX) :].lower()
         parts = key.split(ENV_DELIM)
         if not parts or parts == [""]:
+            continue
+        if allowed_toplevel is not None and parts[0] not in allowed_toplevel:
             continue
         cursor = out
         for piece in parts[:-1]:
@@ -54,13 +76,13 @@ def _coerce_scalar(s: str) -> Any:
 
 def load_cluster_file(path: Path | str) -> ClusterFile:
     raw = load_yaml(Path(path))
-    merged = _apply_env_overrides(raw)
+    merged = _apply_env_overrides(raw, allowed_toplevel=_CLUSTER_TOPLEVEL)
     return ClusterFile.model_validate(merged)
 
 
 def load_profile_file(path: Path | str) -> ProfileFile:
     raw = load_yaml(Path(path))
-    merged = _apply_env_overrides(raw)
+    merged = _apply_env_overrides(raw, allowed_toplevel=_PROFILE_TOPLEVEL)
     return ProfileFile.model_validate(merged)
 
 

@@ -26,16 +26,46 @@ _LOG = logging.getLogger(__name__)
 
 
 def _build_subparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="vctl serve")
-    p.add_argument("--skip-preflight", action="store_true")
+    p = argparse.ArgumentParser(
+        prog="vctl serve",
+        description=(
+            "Spawn a vllm inference server, wait for readiness, attach to the LB pool,\n"
+            "then wait for the subprocess to exit.  On SIGINT/SIGTERM/SIGHUP the backend\n"
+            "is drained and removed from the pool before the process tree is killed.\n"
+            "\n"
+            "Signal handling:\n"
+            "  SIGINT / SIGTERM / SIGHUP — graceful drain → detach → kill subprocess tree\n"
+            "\n"
+            "Relevant env vars:\n"
+            "  VCTL_READY_TIMEOUT      — readiness poll timeout in seconds (default: 1800)\n"
+            "  VLLM_ENGINE_READY_TIMEOUT_S — per-profile override (wins over VCTL_READY_TIMEOUT)\n"
+            "  LB_DETACH_WAIT          — seconds to wait for in-flight requests to drain\n"
+            "  VCTL_KILL_GRACE         — SIGTERM→SIGKILL grace period in seconds\n"
+        ),
+    )
+    p.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Skip the preflight checks (GPU, /dev/shm, venv, LB route) before serving",
+    )
     return p
 
 
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
-    _build_subparser().parse_args(argv_rest)
+    parsed = _build_subparser().parse_args(argv_rest)
+
+    # C6: wire --skip-preflight.  When not skipped, run preflight checks first.
+    if not parsed.skip_preflight:
+        from vctl.commands import preflight as _preflight
+
+        pf_rc = _preflight.run(ns, [])
+        if pf_rc != 0:
+            _LOG.error("preflight checks failed (exit %d); aborting serve", pf_rc)
+            return pf_rc
+
     rc = resolve(ns.config, profile=ns.profile)
 
-    # FAIL-FAST POOL ROUTING — before preflight, before subprocess.
+    # FAIL-FAST POOL ROUTING — before subprocess.
     # If the cluster has no pool serving this profile's model, exit 3
     # immediately (don't waste a multi-minute model load).
     state_dir = Path(rc.cluster.state_dir)
@@ -108,7 +138,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     except TimeoutError as e:
         _LOG.error("readiness timed out: %s", e)
         _kill_tree(proc.pid)
-        return 1
+        return 4  # C8: environment error (timeout) → exit 4
 
     lb_scaling._do_add(ep, mgr, bs, pool_name=pool.name)
     state["attached"] = True

@@ -19,8 +19,18 @@ from vctl.resolver import resolve
 
 
 def _build_subparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="vctl stop")
-    p.add_argument("--json", action="store_true")
+    p = argparse.ArgumentParser(
+        prog="vctl stop",
+        description=(
+            "Drain and remove this host's vllm endpoint(s) from all LB pools,\n"
+            "then kill the local vllm subprocess tree.\n"
+            "\n"
+            "Env vars:\n"
+            "  LB_DETACH_WAIT   — seconds to wait for in-flight requests to drain\n"
+            "  VCTL_KILL_GRACE  — SIGTERM→SIGKILL grace period in seconds\n"
+        ),
+    )
+    p.add_argument("--json", action="store_true", help="Emit results as JSON")
     return p
 
 

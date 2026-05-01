@@ -30,7 +30,6 @@ def _build_subparser() -> argparse.ArgumentParser:
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     parsed = _build_subparser().parse_args(argv_rest)
     target_dir = Path(parsed.dir).resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
 
     requested = [p.strip() for p in parsed.profiles.split(",") if p.strip()]
     unknown = [p for p in requested if p not in PROFILE_TEMPLATES]
@@ -39,21 +38,30 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         print(f"available: {', '.join(sorted(PROFILE_TEMPLATES))}", file=sys.stderr)
         return 3
 
-    created: list[Path] = []
+    # C11: pre-flight existence sweep — check ALL targets before writing anything.
     cluster_yaml = target_dir / "cluster.yaml"
-    if cluster_yaml.exists() and not parsed.force:
-        print(f"refusing to overwrite {cluster_yaml} (pass --force)", file=sys.stderr)
-        return 2
+    models_dir = target_dir / "models"
+    target_paths: list[Path] = [cluster_yaml] + [
+        models_dir / f"{name}.yaml" for name in requested
+    ]
+    if not parsed.force:
+        existing = [p for p in target_paths if p.exists()]
+        if existing:
+            print("refusing to overwrite existing file(s) (pass --force):", file=sys.stderr)
+            for p in existing:
+                print(f"  {p}", file=sys.stderr)
+            return 2
+
+    # All-clear (or --force): proceed with writes.
+    target_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    created: list[Path] = []
     cluster_yaml.write_text(CLUSTER_TEMPLATE)
     created.append(cluster_yaml)
 
-    models_dir = target_dir / "models"
-    models_dir.mkdir(parents=True, exist_ok=True)
     for name in requested:
         path = models_dir / f"{name}.yaml"
-        if path.exists() and not parsed.force:
-            print(f"refusing to overwrite {path} (pass --force)", file=sys.stderr)
-            return 2
         path.write_text(PROFILE_TEMPLATES[name])
         created.append(path)
 

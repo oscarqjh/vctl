@@ -25,12 +25,14 @@ profile: qwen3-vl-30b-a3b
 cluster:
   # Path to the venv containing the vllm binary. `<venv>/bin` is prepended
   # to $PATH before the serve subprocess is spawned.
-  venv: /mnt/umm/users/qianjianheng/workspace/vllm_test/.venv_0_19_2rc1
+  # EDIT_ME: replace with the absolute path to your vllm virtualenv.
+  venv: /path/to/your/vllm/.venv  # EDIT_ME
 
   # Shared FS directory for the atomic backend-state file
   # (`<lb.host>_backends.txt`). Must be writable by every pod that
   # calls `vctl lb add`, `attach`, etc. flock-based mutual exclusion.
-  state_dir: /mnt/aigc/users/qianjianheng/.vllm-lb-state
+  # EDIT_ME: replace with a shared filesystem path visible to all worker pods.
+  state_dir: /path/to/state  # EDIT_ME
 
   # Cluster-wide env vars merged into the vllm subprocess.
   # `profile.env` wins on conflicts.
@@ -42,7 +44,8 @@ lb:
 
   # IP of the pod that runs haproxy. `vctl lb start` refuses unless
   # this pod's detected IP matches (override with --force).
-  host: 10.119.30.181
+  # EDIT_ME: replace with your LB pod's IP address.
+  host: 10.0.0.1  # EDIT_ME — your LB pod IP
 
   # Admin runtime API socket (TCP). Used by `vctl lb add/remove/drain` etc.
   # to talk to a remote haproxy without ssh.

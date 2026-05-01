@@ -48,12 +48,12 @@ def test_positional_profile_shortcut(tmp_path, monkeypatch) -> None:
 
 
 def test_config_resolution_order_uses_home_default(tmp_path, monkeypatch) -> None:
-    """When no --config, no env, no cwd cluster.yaml: falls back to ~/vctl-cfg/cluster.yaml."""
+    """When no --config, no env, no ~/.vctl/cluster.yaml: exits 2 with helpful message."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.delenv("CLUSTER_CONFIG", raising=False)
-    monkeypatch.chdir(tmp_path)  # no cluster.yaml in cwd
+    monkeypatch.chdir(tmp_path)  # no cluster.yaml in cwd (cwd no longer consulted)
     # No cluster.yaml anywhere → exit 2 + helpful message
     proc = subprocess.run(
         [sys.executable, "-m", "vctl", "info"],
@@ -65,7 +65,7 @@ def test_config_resolution_order_uses_home_default(tmp_path, monkeypatch) -> Non
     assert proc.returncode == 2
     err = proc.stderr.lower()
     assert "cluster.yaml" in err
-    assert "init-config" in err or "vctl-cfg" in err
+    assert "init-config" in err
 
 
 def test_config_env_var_overrides_default(tmp_path, monkeypatch) -> None:

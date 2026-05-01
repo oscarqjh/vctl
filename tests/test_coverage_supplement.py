@@ -174,10 +174,12 @@ def test_config_validate_bad_file(tmp_path: Path) -> None:
 def test_config_migrate(tmp_path: Path) -> None:
     from vctl.commands.config_cmd import run
 
-    # Use a fresh cluster yaml (already new format — migrate is a no-op but runs)
+    # C4: default (no --write) is dry-run; file stays unchanged, rc=0.
     ns = _ns(tmp_path)
+    original = (tmp_path / "cluster.yaml").read_text()
     rc = run(ns, ["migrate", str(tmp_path / "cluster.yaml")])
     assert rc == 0
+    assert (tmp_path / "cluster.yaml").read_text() == original
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +193,7 @@ def test_preflight_run_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     from vctl.commands.preflight import run
 
     rc = run(_ns(tmp_path), ["--json"])
-    assert rc in (0, 3)
+    assert rc in (0, 4)  # C8: 4 = environment checks failed
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert "checks" in payload
@@ -203,7 +205,7 @@ def test_preflight_run_text(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     from vctl.commands.preflight import run
 
     rc = run(_ns(tmp_path), [])
-    assert rc in (0, 3)
+    assert rc in (0, 4)  # C8: 4 = environment checks failed
     out = capsys.readouterr().out
     assert "[OK]" in out or "[FAIL]" in out
 

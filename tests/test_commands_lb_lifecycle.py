@@ -26,7 +26,8 @@ def _make_repo(tmp_path: Path) -> Path:
 
 def test_lb_where(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    proc = _vctl("lb", "where", cwd=repo)
+    env = {**os.environ, "CLUSTER_CONFIG": str(repo / "cluster.yaml")}
+    proc = _vctl("lb", "where", cwd=repo, env=env)
     assert proc.returncode == 0
     assert "10.0.0.1:8080" in proc.stdout
 
@@ -34,6 +35,11 @@ def test_lb_where(tmp_path: Path) -> None:
 def test_lb_wait_ready_timeout(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     proc = _vctl(
-        "lb", "wait-ready", "1", cwd=repo, env={**os.environ, "LB_WAIT_TIMEOUT": "1"}, timeout=5
+        "lb",
+        "wait-ready",
+        "1",
+        cwd=repo,
+        env={**os.environ, "CLUSTER_CONFIG": str(repo / "cluster.yaml"), "LB_WAIT_TIMEOUT": "1"},
+        timeout=5,
     )
-    assert proc.returncode == 1
+    assert proc.returncode == 4  # C8: environment timeout → exit 4

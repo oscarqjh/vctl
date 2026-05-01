@@ -35,9 +35,9 @@ vctl --version
 In order:
 1. `--config <path>` CLI flag
 2. `CLUSTER_CONFIG` env var
-3. `./cluster.yaml` (current directory)
-4. `~/.vctl/cluster.yaml` (canonical default — co-located with runtime artifacts under `~/.vctl/lb/`)
-5. `~/vctl-cfg/cluster.yaml` (legacy default — kept as transparent BC fallback)
+3. `~/.vctl/cluster.yaml` (canonical default)
+
+If none of these point to a readable file, vctl exits 2 with a clear message and tells you to run `vctl init-config`.
 
 Bootstrap a config in the default location so `vctl` works from any directory:
 
@@ -71,7 +71,7 @@ Options:
 
 | Flag | Description |
 |---|---|
-| `--dir <path>` | Write files into `<path>` instead of the current directory. |
+| `--dir <path>` | Write files into `<path>` instead of `~/.vctl/`. |
 | `--force` | Overwrite existing files without prompting. |
 | `--profiles a,b,c` | Scaffold only the named profiles (default: all built-in). |
 
@@ -215,7 +215,8 @@ Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Setting
 | Command | Description |
 |---|---|
 | `vctl info` | Print resolved cluster + profile config as a table. |
-| `vctl profiles` | List available profile YAML files under the configured profiles dir. |
+| `vctl profiles` | List available profile YAML files; `*` marks the active one. |
+| `vctl profiles set <name>` | Switch the active profile by rewriting `profile:` in `cluster.yaml`. |
 | `vctl args` | Print the vLLM CLI args that would be used for the active profile. |
 | `vctl preflight` | Validate environment: GPU count, port availability, venv existence. |
 | `vctl serve [PROFILE]` | Launch vLLM backends and auto-attach to LB. |

@@ -116,9 +116,13 @@ class Model(_Strict):
 
 
 class ClusterFile(BaseModel):
-    """Top-level cluster.yaml document. Lenient at the top level."""
+    """Top-level cluster.yaml document.
 
-    model_config = ConfigDict(extra="ignore")
+    Strict at the top level — unknown keys are rejected so typos like
+    ``Profile:`` (capital) produce a clear error rather than silent data loss.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     apiVersion: ApiVersion  # noqa: N815
     kind: Literal["Cluster"]
     cluster: ClusterSection
@@ -127,9 +131,13 @@ class ClusterFile(BaseModel):
 
 
 class ProfileFile(BaseModel):
-    """Top-level models/<name>.yaml document. Lenient on vllm_args + env."""
+    """Top-level models/<name>.yaml document.
 
-    model_config = ConfigDict(extra="ignore")
+    Strict at the top level — unknown keys are rejected.
+    ``vllm_args`` and ``env`` are open dicts (any keys allowed inside them).
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     apiVersion: ApiVersion  # noqa: N815
     kind: Literal["Profile"]
     model: Model

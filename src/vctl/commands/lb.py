@@ -48,7 +48,6 @@ def _build_subparser() -> argparse.ArgumentParser:
         "stop",
         "status",
         "is-host",
-        "where",
         "list",
         "stats",
         "logs",
@@ -59,6 +58,13 @@ def _build_subparser() -> argparse.ArgumentParser:
         "health",
     ):
         sp.add_parser(verb, help=_LB_VERB_HELP[verb])
+    # C10: `where` now accepts an optional --pool filter.
+    wh = sp.add_parser("where", help=_LB_VERB_HELP["where"])
+    wh.add_argument(
+        "--pool",
+        default=None,
+        help="Print only the matching pool's host:port (exit 3 if not found)",
+    )
     # Verbs with args / flags.
     start = sp.add_parser("start", help=_LB_VERB_HELP["start"])
     start.add_argument(
@@ -102,7 +108,24 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     verb = parsed.verb
     mgr, bs, _ = _manager(ns)
     if verb == "where":
-        print(f"{mgr.lb.host}:{mgr.lb.pools[0].bind_port}")
+        # C10: multi-pool support + optional --pool <name> filter.
+        pool_name = getattr(parsed, "pool", None)
+        if pool_name is not None:
+            match = next((p for p in mgr.lb.pools if p.name == pool_name), None)
+            if match is None:
+                print(
+                    f"unknown pool {pool_name!r}; "
+                    f"available: {[p.name for p in mgr.lb.pools]}",
+                    file=sys.stderr,
+                )
+                return 3
+            print(f"{mgr.lb.host}:{match.bind_port}")
+            return 0
+        if len(mgr.lb.pools) == 1:
+            print(f"{mgr.lb.host}:{mgr.lb.pools[0].bind_port}")
+        else:
+            for p in mgr.lb.pools:
+                print(f"{p.name}\t{mgr.lb.host}:{p.bind_port}")
         return 0
     if verb == "is-host":
         return 0 if mgr.is_host() else 1
@@ -244,7 +267,7 @@ def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:
                 f"timed out: {', '.join(details)} (after {timeout_str}s)",
                 file=sys.stderr,
             )
-            return 1
+            return 4  # C8: environment timeout → exit 4
 
         now = time.monotonic()
         if now - last_log >= 30:

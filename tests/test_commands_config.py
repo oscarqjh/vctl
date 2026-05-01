@@ -43,7 +43,11 @@ def test_show_with_env_override(tmp_path: Path) -> None:
     (repo / "cluster.yaml").write_text((FIX / "sample_cluster.yaml").read_text())
     (repo / "models").mkdir()
     (repo / "models" / "qwen3-9b.yaml").write_text((FIX / "sample_profile.yaml").read_text())
-    env = {**os.environ, "VCTL_LB__HOST": "10.99.99.99"}
+    env = {
+        **os.environ,
+        "VCTL_LB__HOST": "10.99.99.99",
+        "CLUSTER_CONFIG": str(repo / "cluster.yaml"),
+    }
     proc = _vctl("config", "show", cwd=repo, env=env)
     assert proc.returncode == 0
     assert "10.99.99.99" in proc.stdout
@@ -56,12 +60,54 @@ def test_schema_outputs_json() -> None:
     assert "ClusterFile" in payload or "cluster" in payload
 
 
-def test_migrate_writes_v1_doc(tmp_path: Path) -> None:
-    """AT-4."""
+def test_migrate_dryrun_default(tmp_path: Path) -> None:
+    """C4: migrate without --write prints diff to stdout, original unchanged."""
     src = tmp_path / "cluster.yaml"
-    src.write_text((FIX / "old_cluster.yaml").read_text())
+    original = (FIX / "old_cluster.yaml").read_text()
+    src.write_text(original)
     proc = _vctl("config", "migrate", str(src))
+    assert proc.returncode == 0
+    # Original file must be untouched.
+    assert src.read_text() == original
+    # No .bak should exist.
+    assert not src.with_suffix(".yaml.bak").exists()
+
+
+def test_migrate_write_creates_bak_and_updates_file(tmp_path: Path) -> None:
+    """C4: --write creates .bak and rewrites the file with vctl/v1 content."""
+    src = tmp_path / "cluster.yaml"
+    original = (FIX / "old_cluster.yaml").read_text()
+    src.write_text(original)
+    proc = _vctl("config", "migrate", "--write", str(src))
     assert proc.returncode == 0
     text = src.read_text()
     assert "apiVersion: vctl/v1" in text
     assert "kind: Cluster" in text
+    bak = src.with_suffix(".yaml.bak")
+    assert bak.exists()
+    assert bak.read_text() == original
+
+
+def test_migrate_write_refuses_existing_bak_without_force(tmp_path: Path) -> None:
+    """C4: --write refuses to clobber existing .bak unless --force is passed."""
+    src = tmp_path / "cluster.yaml"
+    src.write_text((FIX / "old_cluster.yaml").read_text())
+    bak = src.with_suffix(".yaml.bak")
+    bak.write_text("precious backup\n")
+    proc = _vctl("config", "migrate", "--write", str(src))
+    assert proc.returncode != 0
+    assert bak.read_text() == "precious backup\n"
+
+
+def test_migrate_write_force_overwrites_bak(tmp_path: Path) -> None:
+    """C4: --write --force overwrites existing .bak."""
+    src = tmp_path / "cluster.yaml"
+    original = (FIX / "old_cluster.yaml").read_text()
+    src.write_text(original)
+    bak = src.with_suffix(".yaml.bak")
+    bak.write_text("old backup\n")
+    proc = _vctl("config", "migrate", "--write", "--force", str(src))
+    assert proc.returncode == 0
+    assert "apiVersion: vctl/v1" in src.read_text()
+    # .bak now contains the original (not "old backup").
+    assert bak.read_text() == original

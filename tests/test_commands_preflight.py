@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,8 +25,9 @@ def test_preflight_json(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         cwd=repo,
+        env={**os.environ, "CLUSTER_CONFIG": str(repo / "cluster.yaml")},
         timeout=10,
     )
-    assert proc.returncode in (0, 3)
+    assert proc.returncode in (0, 4)  # C8: 4 = environment checks failed
     payload = json.loads(proc.stdout)
     assert "checks" in payload

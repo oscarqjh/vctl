@@ -30,18 +30,18 @@
 - [x] B12: legacy state-file migration not flock-protected, races across processes — wrap in `_locked()` + `_atomic_write`, or move to LbManager.__init__ once (state.py:27-41)
 
 ### Commit C — config + UX (Tier 1 + Tier 2 regressions)
-- [ ] C1: ClusterFile/ProfileFile use `extra="ignore"` at top level — silently swallows typos like `Profile:` (capital). Switch to `extra="forbid"` (models.py:118-141)
-- [ ] C2: `profiles set` regex would mangle `profile: |` block scalar — reject if matched line is block-scalar header; reject multiple top-level `profile:` lines (profiles.py:52-56)
-- [ ] C3: `profiles set` no atomic write or utf-8 encoding — write to tmp + os.replace; encoding="utf-8" explicit (profiles.py:51)
-- [ ] C4: `config migrate` clobbers w/o backup — make `--write` opt-in (default = diff only), validate `new` round-trips through ClusterFile, write `<path>.bak` before clobber (config_cmd.py:98-108)
-- [ ] C5: `vctl config -h` shows bare verbs (regresses prior `lb` fix) — add `help=` per `add_parser`, `description=` on parent (config_cmd.py:24-33)
-- [ ] C6: `serve`/`stop`/`preflight` subparsers missing `description=`/help; `--skip-preflight` is no-op — wire it up or remove (serve.py:28-31, stop.py:20-23, preflight.py:16-18)
-- [ ] C7: `--profile`/`--log-level`/`--log-format` no `help=` text (cli.py:69-91)
-- [ ] C8: Exit code drift across modules vs documented mapping (0 ok, 1 generic, 2 config, 3 user, 4 environment): profiles.py:55→3, serve.py:111→4, preflight.py:66→4, lb.py:247→4
-- [ ] C9: `cli.py` catch-all `except FileNotFoundError` returns 2 even for non-cluster.yaml errors — narrow predicate
-- [ ] C10: `vctl lb where` shows only `pools[0]` — list all pools when >1 (lb.py:104-105)
-- [ ] C11: `init_config` partial clobber on `--force` — pre-flight existence sweep, fail before any write (init_config.py:44-58)
-- [ ] C12: `templates.py` ships hard-coded `/mnt/umm/...` and `/mnt/aigc/...` site-specific paths — replace with `<EDIT_ME>` sentinels or `${HOME}` template
+- [x] C1: ClusterFile/ProfileFile use `extra="ignore"` at top level — silently swallows typos like `Profile:` (capital). Switch to `extra="forbid"` (models.py:118-141)
+- [x] C2: `profiles set` regex would mangle `profile: |` block scalar — reject if matched line is block-scalar header; reject multiple top-level `profile:` lines (profiles.py:52-56)
+- [x] C3: `profiles set` no atomic write or utf-8 encoding — write to tmp + os.replace; encoding="utf-8" explicit (profiles.py:51)
+- [x] C4: `config migrate` clobbers w/o backup — make `--write` opt-in (default = diff only), validate `new` round-trips through ClusterFile, write `<path>.bak` before clobber (config_cmd.py:98-108)
+- [x] C5: `vctl config -h` shows bare verbs (regresses prior `lb` fix) — add `help=` per `add_parser`, `description=` on parent (config_cmd.py:24-33)
+- [x] C6: `serve`/`stop`/`preflight` subparsers missing `description=`/help; `--skip-preflight` is no-op — wire it up or remove (serve.py:28-31, stop.py:20-23, preflight.py:16-18)
+- [x] C7: `--profile`/`--log-level`/`--log-format` no `help=` text (cli.py:69-91)
+- [x] C8: Exit code drift across modules vs documented mapping (0 ok, 1 generic, 2 config, 3 user, 4 environment): profiles.py:55→3, serve.py:111→4, preflight.py:66→4, lb.py:247→4
+- [x] C9: `cli.py` catch-all `except FileNotFoundError` returns 2 even for non-cluster.yaml errors — narrow predicate
+- [x] C10: `vctl lb where` shows only `pools[0]` — list all pools when >1 (lb.py:104-105)
+- [x] C11: `init_config` partial clobber on `--force` — pre-flight existence sweep, fail before any write (init_config.py:44-58)
+- [x] C12: `templates.py` ships hard-coded `/mnt/umm/...` and `/mnt/aigc/...` site-specific paths — replace with `<EDIT_ME>` sentinels or `${HOME}` template
 
 ### Commit D — env / coerce / resolver hardening
 - [ ] D1: env override silently overwrites scalar with dict (`VCTL_LB__HOST__FOO=1` clobbers `lb.host`) — raise ValueError on non-mapping descent (settings.py:16-37)
