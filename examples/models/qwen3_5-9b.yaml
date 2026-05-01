@@ -34,6 +34,12 @@ server:
 # Pass-through args appended to `vllm serve <model>`. Use kebab-case to
 # match vllm CLI flag names. Booleans are rendered as `--flag=true|false`.
 vllm_args:
+  # Multimodal init flags. Even for text-leaning models, vllm registers
+  # Qwen3.5-9B via the Qwen2VL family and runs multimodal init. These two
+  # flags route the encoder + processor cache through shared memory so
+  # multiple API server workers don't race on HF Hub downloads.
+  mm-encoder-tp-mode: data
+  mm-processor-cache-type: shm
   reasoning-parser: qwen3
   enable-prefix-caching: true
   async-scheduling: true
