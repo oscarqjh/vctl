@@ -146,8 +146,9 @@ def test_stop_kills_pid_even_when_drain_fails(
     monkeypatch.setattr("vctl.commands.stop._wait_for_idle", lambda port, timeout: None)
     monkeypatch.setattr("vctl.commands.stop._kill_tree", lambda pid, **kw: killed_pids.append(pid))
 
-    from vctl.commands import stop
     import argparse
+
+    from vctl.commands import stop
 
     rc = MagicMock()
     rc.lb = lb
@@ -176,14 +177,19 @@ def test_stop_empty_pools_just_kills(
     killed_pids: list[int] = []
     drain_calls: list[str] = []
 
-    monkeypatch.setattr(lb_scaling, "_do_drain", lambda ep, m, pool_name=None: drain_calls.append(ep) or 0)
+    def _fake_drain(ep: str, m: LbManager, pool_name: str | None = None) -> int:
+        drain_calls.append(ep)
+        return 0
+
+    monkeypatch.setattr(lb_scaling, "_do_drain", _fake_drain)
     monkeypatch.setattr("vctl.commands.stop.detect_self_ip", lambda: self_ip)
     monkeypatch.setattr("vctl.commands.stop._find_local_vllm", lambda port: [777])
     monkeypatch.setattr("vctl.commands.stop._wait_for_idle", lambda port, timeout: None)
     monkeypatch.setattr("vctl.commands.stop._kill_tree", lambda pid, **kw: killed_pids.append(pid))
 
-    from vctl.commands import stop
     import argparse
+
+    from vctl.commands import stop
 
     rc = MagicMock()
     rc.lb = lb

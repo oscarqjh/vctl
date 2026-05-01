@@ -10,7 +10,7 @@ import sys
 import time
 
 from vctl.lb.manager import LbManager
-from vctl.lb.probe import probe_local_vllm
+from vctl.lb.probe import probe_local_vllm, probe_vllm
 from vctl.lb.routing import pool_for_endpoint
 from vctl.lb.runtime import RuntimeClient
 from vctl.lb.state import BackendState
@@ -356,6 +356,7 @@ def _do_auto_add(mgr: LbManager, bs: BackendState) -> int:
 
 def _do_health(mgr: LbManager, bs: BackendState) -> int:
     unhealthy = 0
+    total = 0
     use_color = sys.stdout.isatty()
     green = "\x1b[32m" if use_color else ""
     red = "\x1b[31m" if use_color else ""
@@ -377,8 +378,10 @@ def _do_health(mgr: LbManager, bs: BackendState) -> int:
         # Aligned columns: endpoint | status | /health | model | running
         col_w = max(len(ep) for ep in eps)
         for ep in eps:
+            # B9: probe the actual backend host, not localhost.
+            host = ep.split(":")[0]
             port = int(ep.rsplit(":", 1)[1])
-            probe = probe_local_vllm(port)
+            probe = probe_vllm(host, port)
             ok = probe.get("healthy", False)
             color = green if ok else red
             marker = "OK  " if ok else "FAIL"
@@ -389,6 +392,9 @@ def _do_health(mgr: LbManager, bs: BackendState) -> int:
                 f"  {color}{marker}{reset}  {ep:<{col_w}}  "
                 f"/health={health}  loaded={loaded}  running={running:.0f}"
             )
+            total += 1
             if not ok:
                 unhealthy += 1
-    return 0 if unhealthy == 0 else unhealthy
+    # B10: print summary + return 1 if any unhealthy (not the count).
+    print(f"unhealthy: {unhealthy} of {total}")
+    return 1 if unhealthy else 0

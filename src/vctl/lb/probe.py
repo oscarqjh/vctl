@@ -16,7 +16,15 @@ class ProbeResult(TypedDict, total=False):
 
 
 def probe_local_vllm(port: int, timeout: float = 2.0) -> ProbeResult:
-    """Test override hook: VCTL_TEST_PROBE_RESULT={ok,empty,unhealthy}."""
+    """Probe vllm on localhost. Kept for backward compat (attach/detach paths)."""
+    return probe_vllm("localhost", port, timeout=timeout)
+
+
+def probe_vllm(host: str, port: int, timeout: float = 2.0) -> ProbeResult:
+    """B9: Probe vllm at an arbitrary host:port.
+
+    Test override hook: VCTL_TEST_PROBE_RESULT={ok,empty,unhealthy}.
+    """
     sentinel = os.environ.get("VCTL_TEST_PROBE_RESULT")
     if sentinel == "ok":
         return {
@@ -42,13 +50,13 @@ def probe_local_vllm(port: int, timeout: float = 2.0) -> ProbeResult:
     out: ProbeResult = {"healthy": False}
     try:
         with httpx.Client(timeout=timeout) as cli:
-            h = cli.get(f"http://localhost:{port}/health")
+            h = cli.get(f"http://{host}:{port}/health")
             out["health_code"] = h.status_code
-            m = cli.get(f"http://localhost:{port}/v1/models")
+            m = cli.get(f"http://{host}:{port}/v1/models")
             data = m.json().get("data", [])
             out["models_loaded"] = bool(data)
             try:
-                metrics = cli.get(f"http://localhost:{port}/metrics").text
+                metrics = cli.get(f"http://{host}:{port}/metrics").text
                 for line in metrics.splitlines():
                     if line.startswith("vllm:num_requests_running "):
                         out["num_requests_running"] = float(line.split()[1])

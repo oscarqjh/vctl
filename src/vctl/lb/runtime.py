@@ -37,13 +37,26 @@ class BackendStatus:
         return "ready"
 
 
-def _parse_endpoint_from_name(name: str, ip_only: str) -> str:
-    if name.startswith("b_"):
-        rest = name[2:]
-        bits = rest.rsplit("_", 1)
-        if len(bits) == 2 and bits[1].isdigit():
-            return f"{ip_only}:{bits[1]}"
-    return ip_only
+def _parse_endpoint_from_name(name: str) -> tuple[str, str] | None:
+    """B8: Parse 'b_<ip_underscores>_<port>' server name.
+
+    Returns (ip, port) if the name matches cleanly, else None.
+    E.g. 'b_10_1_2_5_8000' → ('10.1.2.5', '8000').
+    """
+    if not name.startswith("b_"):
+        return None
+    rest = name[2:]
+    # Last segment is port; preceding 4 segments are IP octets.
+    parts = rest.split("_")
+    if len(parts) != 5:
+        return None
+    port = parts[4]
+    if not port.isdigit():
+        return None
+    ip_parts = parts[:4]
+    if not all(p.isdigit() and 0 <= int(p) <= 255 for p in ip_parts):
+        return None
+    return ".".join(ip_parts), port
 
 
 class RuntimeClient:
@@ -53,12 +66,14 @@ class RuntimeClient:
     @classmethod
     def for_unix(cls, path: str) -> RuntimeClient:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(5.0)  # B2
         s.connect(path)
         return cls(s)
 
     @classmethod
     def for_tcp(cls, host: str, port: int) -> RuntimeClient:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5.0)  # B2
         s.connect((host, port))
         return cls(s)
 
@@ -67,25 +82,43 @@ class RuntimeClient:
         return cls(sock)
 
     def _send(self, cmd: str) -> str:
+        # B2: loop recv until \n\n terminator or connection closed.
         self._sock.sendall((cmd + "\n").encode("utf-8"))
         chunks: list[bytes] = []
-        while True:
-            data = self._sock.recv(4096)
-            if not data:
-                break
-            chunks.append(data)
-            if b"\n\n" in data or len(data) < 4096:
-                break
+        try:
+            while True:
+                data = self._sock.recv(4096)
+                if not data:
+                    break
+                chunks.append(data)
+                if b"".join(chunks).endswith(b"\n\n"):
+                    break
+        except TimeoutError as exc:
+            raise RuntimeError("haproxy admin socket timeout") from exc
         return b"".join(chunks).decode("utf-8", errors="replace")
 
     def add_server(self, backend: str, name: str, ep: str) -> Literal["new", "already_present"]:
+        # B6: parse success/already-present tokens; raise on errors.
         out = self._send(f"add server {backend}/{name} {ep} check")
-        if "already exists" in out.lower() or "already present" in out.lower():
+        stripped = out.strip()
+        low = stripped.lower()
+        if low.startswith("new server") or stripped == "":
+            return "new"
+        if "already exists" in low or "already present" in low:
             return "already_present"
-        return "new"
+        raise RuntimeError(f"haproxy add_server failed: {stripped}")
 
     def remove_server(self, backend: str, name: str) -> None:
-        self._send(f"del server {backend}/{name}")
+        # B7: parse response and raise on errors; tolerate "no such server".
+        out = self._send(f"del server {backend}/{name}")
+        stripped = out.strip()
+        if stripped == "" or stripped.lower().startswith("server deleted"):
+            return
+        low = stripped.lower()
+        if "no such server" in low:
+            # Already gone — idempotent, don't raise.
+            return
+        raise RuntimeError(f"haproxy remove_server failed: {stripped}")
 
     def set_state(self, backend: str, name: str, state: Literal["ready", "maint", "drain"]) -> None:
         self._send(f"set server {backend}/{name} state {state}")
@@ -108,11 +141,20 @@ class RuntimeClient:
                 with contextlib.suppress(ValueError):
                     admin_state = int(parts[6])
             name = parts[3]
-            ip = parts[4]
+            srv_addr = parts[4]
+            # B8: prefer IP decoded from name; skip rows where srv_addr=0.0.0.0
+            # and name doesn't parse (unresolved/garbage).
+            parsed = _parse_endpoint_from_name(name)
+            if parsed is not None:
+                endpoint = f"{parsed[0]}:{parsed[1]}"
+            elif srv_addr == "0.0.0.0":
+                continue  # unresolvable row — skip
+            else:
+                endpoint = srv_addr
             rows.append(
                 BackendStatus(
                     name=name,
-                    endpoint=_parse_endpoint_from_name(name, ip),
+                    endpoint=endpoint,
                     op_state=op_state,
                     admin_state=admin_state,
                 )

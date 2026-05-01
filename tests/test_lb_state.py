@@ -53,6 +53,8 @@ def test_per_pool_state_isolation(tmp_path: Path) -> None:
 def test_legacy_state_file_migrated_on_first_read(tmp_path: Path) -> None:
     legacy = tmp_path / "host_backends.txt"
     legacy.write_text("10.0.0.1:8000\n10.0.0.2:8000\n")
+    # B12: migration now runs via classmethod (called by LbManager.__init__)
+    BackendState.migrate_if_needed(tmp_path, "host")
     bs = BackendState(tmp_path, "host", pool="default")
     assert sorted(bs.list()) == ["10.0.0.1:8000", "10.0.0.2:8000"]
     assert not legacy.exists()
@@ -62,9 +64,14 @@ def test_legacy_state_file_migrated_on_first_read(tmp_path: Path) -> None:
 def test_legacy_migration_only_for_default_pool(tmp_path: Path) -> None:
     legacy = tmp_path / "host_backends.txt"
     legacy.write_text("10.0.0.1:8000\n")
+    # migrate_if_needed only migrates default_backends.txt, so the legacy file
+    # should be consumed into default_backends.txt; non-default pool stays empty.
+    BackendState.migrate_if_needed(tmp_path, "host")
     bs = BackendState(tmp_path, "host", pool="not_default")
     assert bs.list() == []  # didn't migrate into non-default
-    assert legacy.exists()  # legacy file untouched
+    # The legacy file is consumed (migrated to default_backends.txt), not left untouched.
+    assert not legacy.exists()
+    assert (tmp_path / "host" / "default_backends.txt").exists()
 
 
 def test_list_pools_enumerates_state_files(tmp_path: Path) -> None:

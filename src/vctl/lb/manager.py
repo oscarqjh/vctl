@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
+import signal
 import socket
+import subprocess
+import time
 from pathlib import Path
 
 from vctl.config.models import LbHaproxy
@@ -26,6 +30,8 @@ class LbManager:
         self.cfg_path = self.run_dir / "haproxy.cfg"
         self.pid_path = self.run_dir / "haproxy.pid"
         self.sock_path = self.run_dir / "haproxy.sock"
+        # B12: run legacy migration once at manager init (flock-protected inside BackendState)
+        BackendState.migrate_if_needed(self.state_dir, self.lb.host)
 
     @property
     def runtime_paths(self) -> RuntimePaths:
@@ -42,6 +48,21 @@ class LbManager:
         return render_haproxy_cfg(self.lb, self.runtime_paths, backends_by_pool)
 
     def start(self, force: bool = False) -> None:
+        # B1: double-start guard — check if already running.
+        status = self.status()
+        if status["running"]:
+            if force:
+                _LOG.info(
+                    "haproxy already running (pid=%s); stopping before restart",
+                    status["pid"],
+                )
+                self.stop()
+            else:
+                raise RuntimeError(
+                    f"haproxy already running (pid={status['pid']}); "
+                    "call stop() first or pass force=True"
+                )
+
         self_ip = detect_self_ip()
         if self_ip != self.lb.host and not force:
             raise RuntimeError(
@@ -60,13 +81,11 @@ class LbManager:
 
         HAProxy daemonizes by default — `tmux_kill` alone doesn't reach the
         long-running process (it's session-detached from tmux). Use the
-        pidfile to send SIGTERM directly, then clean up the tmux session
-        (and pidfile) too.
+        pidfile to send SIGTERM directly, poll for exit with SIGKILL fallback,
+        then clean up the tmux session, pidfile, and admin socket.
         """
-        import os
-        import signal
-
         # 1. SIGTERM the haproxy pid if pidfile is good.
+        pid: int | None = None
         if self.pid_path.exists():
             try:
                 raw = self.pid_path.read_text().strip()
@@ -77,8 +96,32 @@ class LbManager:
                         _LOG.info("sent SIGTERM to haproxy pid=%d", pid)
             except (ValueError, OSError) as e:
                 _LOG.warning("could not read pidfile %s: %s", self.pid_path, e)
-            with contextlib.suppress(OSError):
-                self.pid_path.unlink()
+
+        # B3: Poll for exit up to 10s; SIGKILL fallback if still alive.
+        if pid is not None:
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                except PermissionError:
+                    break
+                time.sleep(0.5)
+            else:
+                # Still alive after 10s — escalate to SIGKILL.
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGKILL)
+                    _LOG.warning("haproxy pid=%d did not exit after SIGTERM; sent SIGKILL", pid)
+                time.sleep(0.2)
+
+        # B3/B4: unlink pidfile and admin socket AFTER process is gone.
+        with contextlib.suppress(OSError):
+            self.pid_path.unlink()
+        # B4: admin socket cleanup (haproxy normally does this on clean exit,
+        # but matters on SIGKILL/crash).
+        with contextlib.suppress(OSError):
+            self.sock_path.unlink()
 
         # 2. Tear down the tmux session if it exists (idempotent).
         tmux_kill(_TMUX_NAME)
@@ -87,9 +130,18 @@ class LbManager:
         if not self.pid_path.exists():
             raise RuntimeError(f"no pidfile at {self.pid_path}; is haproxy running?")
         binary = ensure_haproxy()
-        import subprocess
 
-        subprocess.run(
+        # B11: precheck config syntax before reload.
+        pre = subprocess.run(
+            [binary, "-c", "-f", str(self.cfg_path)],
+            capture_output=True,
+            text=True,
+        )
+        if pre.returncode != 0:
+            raise RuntimeError("haproxy config syntax error:\n" + pre.stderr)
+
+        # Reload with stdout/stderr captured; surface failures.
+        result = subprocess.run(
             [
                 binary,
                 "-f",
@@ -99,8 +151,16 @@ class LbManager:
                 "-sf",
                 self.pid_path.read_text().strip(),
             ],
-            check=True,
+            capture_output=True,
+            text=True,
         )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                result.args,
+                output=result.stdout,
+                stderr=result.stderr,
+            )
 
     def status(self) -> dict[str, object]:
         """Comprehensive status: detect haproxy regardless of who started it.
@@ -121,11 +181,12 @@ class LbManager:
                 if raw:
                     pid = int(raw.split()[0])
                     # Signal 0 = does the process exist + are we allowed to signal it
-                    import os
-
-                    with contextlib.suppress(OSError, ProcessLookupError):
+                    try:
                         os.kill(pid, 0)
-                        pid_alive = True
+                        # B5: verify /proc/<pid>/comm to avoid PID-recycle false positives.
+                        pid_alive = _verify_pid_is_haproxy(pid)
+                    except (ProcessLookupError, PermissionError):
+                        pid_alive = False
             except (ValueError, OSError):
                 pid = None
 
@@ -148,3 +209,17 @@ class LbManager:
             "tmux_managed": tmux_managed,
             "cfg_path": str(self.cfg_path),
         }
+
+
+def _verify_pid_is_haproxy(pid: int) -> bool:
+    """B5: Check /proc/<pid>/comm to guard against PID reuse.
+
+    Returns True if the process appears to be haproxy (or if /proc is
+    unavailable, e.g. on macOS — conservatively trusts the signal-0 result).
+    """
+    try:
+        comm = Path(f"/proc/{pid}/comm").read_text().strip()
+        return "haproxy" in comm
+    except OSError:
+        # /proc not available (macOS) or process vanished — trust signal 0
+        return True
