@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.10] - 2026-05-02
+
+### Fixed
+- **`_client` falls through to TCP when unix-socket connect fails.** On a
+  worker pod with `~/.vctl/` on a shared/NFS-mounted filesystem, the
+  haproxy.sock FILE exists but `connect()` raises EOPNOTSUPP / ECONNREFUSED
+  because the socket is bound on a different host. Previously `_client`
+  saw `sock.exists()=True`, attempted unix, hit OSError, and returned None
+  — never trying the TCP fallback. `lb info` then showed all backends as
+  ⚠ tracked-only on workers despite the LB being reachable. Now: unix
+  attempt is wrapped in its own try/except, and TCP is always attempted on
+  unix failure.
+
 ## [0.2.9] - 2026-05-02
 
 ### Fixed

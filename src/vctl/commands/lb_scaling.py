@@ -42,9 +42,15 @@ def _client(mgr: LbManager) -> RuntimeClient | None:
     if os.environ.get("VCTL_TEST_NO_SOCKET") == "1":
         return _NoOpClient()  # type: ignore[return-value]
     sock = mgr.sock_path
-    try:
-        if sock.exists():
+    # On a worker with shared/NFS-mounted home, the unix socket FILE may exist
+    # but connect() fails because the socket is bound on a different host.
+    # If unix connect fails, fall through to TCP instead of giving up.
+    if sock.exists():
+        try:
             return RuntimeClient.for_unix(str(sock))
+        except OSError:
+            pass  # NFS mirage; fall through to TCP
+    try:
         return RuntimeClient.for_tcp(mgr.lb.host, mgr.lb.admin.bind_port)
     except OSError:
         return None
