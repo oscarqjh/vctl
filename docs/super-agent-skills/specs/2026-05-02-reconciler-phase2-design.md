@@ -340,62 +340,62 @@ The `LB_DETACH_WAIT` timeout and the `probe_local_vllm` poll loop are applicatio
 
 ## Acceptance Tests
 
-- [ ] `test: lb add against running LB exits 0 and prints ADDED action in stderr`
+- [x] `test: lb add against running LB exits 0 and prints ADDED action in stderr`
       Given: a running LB (mocked `lb_admin_client` returning a `MagicMock` `RuntimeClient` that reports empty `show_servers_state`), an empty state file, and a single configured pool named `"default"`
       When: `vctl lb add 10.0.0.5:8000` is invoked (or `_do_add("10.0.0.5:8000", mgr, bs, pool_name="default")` is called directly)
       Then: return code is 0; stderr contains `ADDED`; the state file contains `"10.0.0.5:8000"`; `mock_client.add_server` and `mock_client.set_state` were each called once
 
-- [ ] `test: lb add against stopped LB exits 4 and leaves state file unchanged`
+- [x] `test: lb add against stopped LB exits 4 and leaves state file unchanged`
       Given: a stopped LB (mocked `lb_admin_client` returning `None`), an empty state file
       When: `_do_add("10.0.0.5:8000", mgr, bs, pool_name="default")` is called
       Then: return code is 4; the state file does not contain `"10.0.0.5:8000"` (unchanged); stderr contains a message referencing the unreachable LB
 
-- [ ] `test: lb remove against running LB exits 0 and surfaces REMOVED action`
+- [x] `test: lb remove against running LB exits 0 and surfaces REMOVED action`
       Given: a running LB (mocked `lb_admin_client` returning a `MagicMock` `RuntimeClient` that reports `10.0.0.5:8000` in `show_servers_state`), a state file containing `"10.0.0.5:8000"`
       When: `_do_remove("10.0.0.5:8000", mgr, bs, pool_name="default")` is called
       Then: return code is 0; stderr contains `REMOVED`; the state file no longer contains `"10.0.0.5:8000"`; `mock_client.set_state` was called with `maint` before `mock_client.remove_server`
 
-- [ ] `test: lb remove against stopped LB exits 4 and leaves state file unchanged`
+- [x] `test: lb remove against stopped LB exits 4 and leaves state file unchanged`
       Given: a stopped LB (mocked `lb_admin_client` returning `None`), a state file containing `"10.0.0.5:8000"`
       When: `_do_remove("10.0.0.5:8000", mgr, bs, pool_name="default")` is called
       Then: return code is 4; the state file still contains `"10.0.0.5:8000"` (unchanged); stderr contains a message referencing the unreachable LB
 
-- [ ] `test: lb drain against running LB exits 0 and surfaces DRAINED action`
+- [x] `test: lb drain against running LB exits 0 and surfaces DRAINED action`
       Given: a running LB (mocked `lb_admin_client` returning a `MagicMock` `RuntimeClient`), a single configured pool
       When: `_do_drain("10.0.0.5:8000", mgr, pool_name="default")` is called
       Then: return code is 0; stderr contains `DRAINED`; `mock_client.set_state` was called with `"drain"`; the state file is unchanged
 
-- [ ] `test: lb drain against stopped LB exits 4`
+- [x] `test: lb drain against stopped LB exits 4`
       Given: a stopped LB (mocked `lb_admin_client` returning `None`)
       When: `_do_drain("10.0.0.5:8000", mgr, pool_name="default")` is called
       Then: return code is 4; stderr contains a message referencing the unreachable LB
 
-- [ ] `test: lb auto-add exits 1 and identifies failed pool when LB unreachable`
+- [x] `test: lb auto-add exits 1 and identifies failed pool when LB unreachable`
       Given: a stopped LB (mocked `lb_admin_client` returning `None`), a state file for pool `"default"` containing `"10.0.0.5:8000"`
       When: `_do_auto_add(mgr, bs)` is called
       Then: return code is 1; stderr contains the pool name `"default"` in the failure message (closes F12 regression)
 
-- [ ] `test: lb add with unknown pool exits 3 and lists available pools`
+- [x] `test: lb add with unknown pool exits 3 and lists available pools`
       Given: a two-pool LB config with pools `"a"` and `"b"` (VCTL_TEST_NO_SOCKET=1); a nonexistent pool `"nonexistent"`
       When: `vctl lb add 10.0.0.5:8000 --pool nonexistent` is invoked
       Then: return code is 3; stderr contains `"nonexistent"` and at least one of `"a"`, `"b"`
 
-- [ ] `test: lb_scaling.py contains no direct state-file write before any haproxy admin call (F11 audit)`
+- [x] `test: lb_scaling.py contains no direct state-file write before any haproxy admin call (F11 audit)`
       Given: the migrated `src/vctl/commands/lb_scaling.py` source
       When: an AST or grep audit checks for `bs.add(` or `bs.remove(` outside of Reconciler delegation in the six migrated verb bodies
       Then: no such call is found — every state mutation goes through `Reconciler`; the `bs.add` / `bs.remove` calls exist only in `reconciler.py`
 
-- [ ] `test: lb_scaling.py contains no contextlib.suppress around haproxy admin calls (F12 audit)`
+- [x] `test: lb_scaling.py contains no contextlib.suppress around haproxy admin calls (F12 audit)`
       Given: the migrated `src/vctl/commands/lb_scaling.py` source
       When: a grep or AST audit checks for `contextlib.suppress` in the bodies of `_do_auto_add` and `_do_add`
       Then: no `contextlib.suppress` is found wrapping any haproxy admin call in either function
 
-- [ ] `test: mypy --strict passes and all 406+ existing tests pass after format updates`
+- [x] `test: mypy --strict passes and all 406+ existing tests pass after format updates`
       Given: the Phase 2 migration applied to `src/vctl/commands/lb_scaling.py`; test fixtures in `tests/test_commands_lb_scaling.py` updated for new stderr format (`ADDED` / `READIED` replacing `(new)` / `(already present)`) and new exit-4 expectations where applicable
       When: `mypy --strict src/vctl` and `pytest` are run
       Then: both commands exit 0; at least 406 tests collected and passing; at least 6 new exit-4 tests present
 
-- [ ] `test: version is 0.3.0 in pyproject.toml and __init__.py, CHANGELOG.md has [0.3.0] section`
+- [x] `test: version is 0.3.0 in pyproject.toml and __init__.py, CHANGELOG.md has [0.3.0] section`
       Given: the Phase 2 PR landed
       When: `pyproject.toml`, `src/vctl/__init__.py`, and `CHANGELOG.md` are inspected
       Then: `pyproject.toml` version field is `"0.3.0"`; `src/vctl/__init__.py` version string is `"0.3.0"`; `CHANGELOG.md` contains a `[0.3.0]` section documenting breaking exit-code changes (exit 4 for LB-unreachable) and F11/F12 closure
