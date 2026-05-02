@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.9] - 2026-05-02
+
+### Fixed
+- **`lb info` Status column reflects HAProxy health.** Previously `✓ live`
+  meant only "registered with haproxy admin" — a backend failing health
+  checks (DOWN, MAINT, DRAIN) was still displayed as live. Now reads
+  haproxy's `status` column from `show stat csv` and surfaces it as
+  `⚠ DOWN` / `⚠ MAINT` / `⚠ DRAIN` / etc. UP backends still show `✓ live`.
+
 ## [0.2.8] - 2026-05-01
 
 ### Removed

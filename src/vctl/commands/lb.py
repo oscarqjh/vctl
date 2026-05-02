@@ -315,20 +315,35 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
             else:
                 status_str = "?"
 
-            # scur / qcur / lastchg from haproxy stats.
+            # scur / qcur / lastchg / status from haproxy stats.
             scur_val: int | None = None
             qcur_val: int | None = None
             lastchg_val: int | None = None
+            haproxy_status: str = ""
             pool_stats = haproxy_stats.get(backend_section, {})
             for _srv_name, srv_data in pool_stats.items():
                 if srv_data.get("ep") == ep:
                     raw_scur = srv_data.get("scur")
                     raw_qcur = srv_data.get("qcur")
                     raw_lastchg = srv_data.get("lastchg")
+                    raw_status = srv_data.get("status")
                     scur_val = int(raw_scur) if isinstance(raw_scur, int) else None
                     qcur_val = int(raw_qcur) if isinstance(raw_qcur, int) else None
                     lastchg_val = int(raw_lastchg) if isinstance(raw_lastchg, int) else None
+                    haproxy_status = str(raw_status) if raw_status else ""
                     break
+
+            # Override the registered/tracked status with HAProxy's health view
+            # when the backend is registered: a registered DOWN backend is more
+            # alarming than a "tracked-only" one.
+            if status_str == "✓ live" and haproxy_status:
+                # status field can be "UP", "DOWN", "MAINT", "DRAIN", "no check",
+                # "UP 1/2" (during rise count-up), "DOWN 1/3" (during fall count).
+                up = haproxy_status.startswith("UP")
+                if not up:
+                    # DOWN, MAINT, DRAIN, or "no check" — surface it.
+                    short = haproxy_status.split()[0]
+                    status_str = f"⚠ {short}"
 
             scur_str = str(scur_val) if scur_val is not None else "--"
             qcur_str = str(qcur_val) if qcur_val is not None else "--"
@@ -394,8 +409,9 @@ def _format_duration(seconds: int) -> str:
 def _fetch_haproxy_stats(cli: object) -> dict[str, dict[str, dict[str, int | str]]]:
     """Parse ``show stat csv`` from haproxy admin socket.
 
-    Returns backend_section -> server_name -> {scur, qcur, lastchg, ep}.
-    Numeric fields are int; ``ep`` is str.
+    Returns backend_section -> server_name -> {scur, qcur, lastchg, ep, status}.
+    Numeric fields are int; ``ep`` and ``status`` are str.
+    ``status`` is HAProxy's view: UP, DOWN, MAINT, DRAIN, NOLB, etc.
     Only SERVER rows (svname != BACKEND/FRONTEND) are returned.
     Falls back to empty dict on any error.
     """
@@ -417,6 +433,7 @@ def _fetch_haproxy_stats(cli: object) -> dict[str, dict[str, dict[str, int | str
     col_qcur = 2
     col_scur = 4
     col_lastchg = 23  # typical haproxy 2.x offset; may vary
+    col_status = 17   # typical; may vary
     col_addr = 73     # typical; may vary
 
     header_cols: list[str] = []
@@ -431,6 +448,7 @@ def _fetch_haproxy_stats(cli: object) -> dict[str, dict[str, dict[str, int | str
             col_qcur = idx.get("qcur", 2)
             col_scur = idx.get("scur", 4)
             col_lastchg = idx.get("lastchg", 23)
+            col_status = idx.get("status", 17)
             col_addr = idx.get("addr", 73)
             continue
         if not line or line.startswith("#"):
@@ -452,6 +470,7 @@ def _fetch_haproxy_stats(cli: object) -> dict[str, dict[str, dict[str, int | str
         scur = _int(parts[col_scur]) if len(parts) > col_scur else 0
         qcur = _int(parts[col_qcur]) if len(parts) > col_qcur else 0
         lastchg = _int(parts[col_lastchg]) if len(parts) > col_lastchg else 0
+        status = parts[col_status].strip() if len(parts) > col_status else ""
         addr_raw = parts[col_addr].strip() if len(parts) > col_addr else ""
 
         # Decode endpoint from server name (b_<ip>_<port>) or addr column.
@@ -467,6 +486,7 @@ def _fetch_haproxy_stats(cli: object) -> dict[str, dict[str, dict[str, int | str
             "scur": scur,
             "qcur": qcur,
             "lastchg": lastchg,
+            "status": status,
             "ep": ep,
         }
 
