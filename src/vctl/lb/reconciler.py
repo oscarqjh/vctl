@@ -252,3 +252,51 @@ class Reconciler:
             raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
 
         return Outcome(ep=ep, pool=pool, action=Action.DRAINED)
+
+    # ---- bulk reconciliation ----
+
+    def reconcile_pool(self, pool: str, target: set[str]) -> list[Outcome]:
+        """Converge haproxy and state to exactly the endpoints in target.
+
+        For each ep in target: call want_present.
+        For each ep currently in haproxy but not in target: call want_absent.
+        Returns the concatenated list of Outcome objects from all operations.
+
+        Fail-fast: acquires client once at the start; raises LbUnreachable
+        immediately if the admin socket is unreachable before any mutations.
+
+        Raises:
+          PoolNotFound: if pool is not in mgr.lb.pools.
+          LbUnreachable: if both unix socket and TCP admin are unreachable.
+        """
+        self._validate_pool(pool)
+        backend_section = f"pool_{pool}"
+
+        client = lb_admin_client(self.mgr)
+        if client is None:
+            raise LbUnreachable(
+                sock=str(self.mgr.sock_path),
+                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
+            )
+
+        outcomes: list[Outcome] = []
+
+        for ep in sorted(target):
+            outcomes.append(self.want_present(ep, pool))
+
+        haproxy_map = self._haproxy_servers(backend_section, client)
+        for ep in sorted(haproxy_map.keys()):
+            if ep not in target:
+                outcomes.append(self.want_absent(ep, pool))
+
+        return outcomes
+
+    def reconcile_from_state(self, pool: str) -> list[Outcome]:
+        """Read state file as the target set and delegate to reconcile_pool.
+
+        Raises:
+          PoolNotFound: if pool is not in mgr.lb.pools.
+          LbUnreachable: if both unix socket and TCP admin are unreachable.
+        """
+        state_entries = BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).list()
+        return self.reconcile_pool(pool, set(state_entries))

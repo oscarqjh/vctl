@@ -572,3 +572,108 @@ def test_want_draining_does_not_touch_state_file(
 
     bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
     assert "10.0.0.5:8000" in bs.list()
+
+
+# ---------------------------------------------------------------------------
+# Task 10: reconcile_pool + reconcile_from_state
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_pool_converges_haproxy_and_state_to_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance: reconcile_pool converges haproxy and state to target set."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    bs.add("10.0.0.5:8000")
+    bs.add("10.0.0.6:8000")
+
+    present_servers = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2),
+        BackendStatus(name="b_10_0_0_7_8000", endpoint="10.0.0.7:8000", op_state=2),
+    ]
+
+    def fake_show_servers_state() -> list[BackendStatus]:
+        return list(present_servers)
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.side_effect = fake_show_servers_state
+    mock_client.add_server.return_value = "new"
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcomes = r.reconcile_pool("default", {"10.0.0.5:8000", "10.0.0.6:8000"})
+
+    assert all(isinstance(o, Outcome) for o in outcomes)
+    eps_in_outcomes = {o.ep for o in outcomes}
+    assert "10.0.0.5:8000" in eps_in_outcomes
+    assert "10.0.0.6:8000" in eps_in_outcomes
+    assert "10.0.0.7:8000" in eps_in_outcomes
+    absent_outcome = next(o for o in outcomes if o.ep == "10.0.0.7:8000")
+    assert absent_outcome.action == Action.REMOVED
+
+    final = sorted(bs.list())
+    assert final == ["10.0.0.5:8000", "10.0.0.6:8000"]
+
+
+def test_reconcile_pool_with_empty_target_removes_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    bs.add("10.0.0.5:8000")
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2),
+    ]
+    mock_client.add_server.return_value = "new"
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcomes = r.reconcile_pool("default", set())
+
+    removed = [o for o in outcomes if o.action == Action.REMOVED]
+    assert len(removed) >= 1
+    assert bs.list() == []
+
+
+def test_reconcile_pool_raises_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.errors import LbUnreachable
+
+    mgr = _make_mgr(tmp_path)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    r = Reconciler(mgr)
+    with pytest.raises(LbUnreachable):
+        r.reconcile_pool("default", {"10.0.0.5:8000"})
+
+
+def test_reconcile_from_state_uses_state_file_as_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    bs.add("10.0.0.5:8000")
+    bs.add("10.0.0.6:8000")
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = []
+    mock_client.add_server.return_value = "new"
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcomes = r.reconcile_from_state("default")
+
+    eps_in_outcomes = {o.ep for o in outcomes}
+    assert "10.0.0.5:8000" in eps_in_outcomes
+    assert "10.0.0.6:8000" in eps_in_outcomes
