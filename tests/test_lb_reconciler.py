@@ -380,3 +380,195 @@ def test_want_present_idempotent_second_call_returns_readied(
     assert outcome2.action in {Action.NONE, Action.READIED}
     bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
     assert bs.list().count("10.0.0.5:8000") == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 8: want_absent(ep, pool) — 3-case action mapping
+# ---------------------------------------------------------------------------
+
+
+def test_want_absent_removes_ep_from_haproxy_first_then_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance: want_absent sets maint then removes from haproxy before state."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    BackendState(mgr.state_dir, mgr.lb.host, pool="default").add("10.0.0.5:8000")
+
+    call_order: list[str] = []
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2),
+    ]
+
+    def track_set_state(backend: str, name: str, state: str) -> None:
+        call_order.append(f"set_state:{state}")
+
+    def track_remove_server(backend: str, name: str) -> None:
+        call_order.append("remove_server")
+
+    mock_client.set_state.side_effect = track_set_state
+    mock_client.remove_server.side_effect = track_remove_server
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcome = r.want_absent("10.0.0.5:8000", "default")
+
+    assert call_order == ["set_state:maint", "remove_server"]
+    mock_client.set_state.assert_any_call("pool_default", "b_10_0_0_5_8000", "maint")
+    mock_client.remove_server.assert_called_once_with("pool_default", "b_10_0_0_5_8000")
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert "10.0.0.5:8000" not in bs.list()
+    assert outcome.action == Action.REMOVED
+
+
+def test_want_absent_returns_none_when_neither_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If ep absent from both, returns NONE without any haproxy calls."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = []
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcome = r.want_absent("10.0.0.5:8000", "default")
+
+    mock_client.set_state.assert_not_called()
+    mock_client.remove_server.assert_not_called()
+    assert outcome.action == Action.NONE
+
+
+def test_want_absent_orphaned_cleaned_when_state_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """in_haproxy=False, in_state=True → ORPHANED_CLEANED; state file cleaned."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    BackendState(mgr.state_dir, mgr.lb.host, pool="default").add("10.0.0.5:8000")
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = []
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcome = r.want_absent("10.0.0.5:8000", "default")
+
+    mock_client.set_state.assert_not_called()
+    mock_client.remove_server.assert_not_called()
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert "10.0.0.5:8000" not in bs.list()
+    assert outcome.action == Action.ORPHANED_CLEANED
+
+
+def test_want_absent_raises_lb_unreachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.errors import LbUnreachable
+
+    mgr = _make_mgr(tmp_path)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    r = Reconciler(mgr)
+    with pytest.raises(LbUnreachable):
+        r.want_absent("10.0.0.5:8000", "default")
+
+
+def test_want_absent_raises_backend_op_failed_and_leaves_state_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If set_state(maint) raises RuntimeError, BackendOpFailed is raised; state unchanged."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.errors import BackendOpFailed
+
+    mgr = _make_mgr(tmp_path)
+    BackendState(mgr.state_dir, mgr.lb.host, pool="default").add("10.0.0.5:8000")
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2),
+    ]
+    mock_client.set_state.side_effect = RuntimeError("haproxy set_state failed")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    with pytest.raises(BackendOpFailed):
+        r.want_absent("10.0.0.5:8000", "default")
+
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert "10.0.0.5:8000" in bs.list()
+
+
+# ---------------------------------------------------------------------------
+# Task 9: want_draining(ep, pool) — drain a registered server
+# ---------------------------------------------------------------------------
+
+
+def test_want_draining_drains_registered_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    mock_client = MagicMock()
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcome = r.want_draining("10.0.0.5:8000", "default")
+
+    mock_client.set_state.assert_called_once_with("pool_default", "b_10_0_0_5_8000", "drain")
+    assert outcome.action == Action.DRAINED
+    assert outcome.ep == "10.0.0.5:8000"
+
+
+def test_want_draining_raises_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.errors import LbUnreachable
+
+    mgr = _make_mgr(tmp_path)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    r = Reconciler(mgr)
+    with pytest.raises(LbUnreachable):
+        r.want_draining("10.0.0.5:8000", "default")
+
+
+def test_want_draining_raises_backend_op_failed_for_unregistered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If set_state raises RuntimeError, BackendOpFailed is raised."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.errors import BackendOpFailed
+
+    mgr = _make_mgr(tmp_path)
+    mock_client = MagicMock()
+    mock_client.set_state.side_effect = RuntimeError("no such server pool_default/b_10_0_0_5_8000")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    with pytest.raises(BackendOpFailed):
+        r.want_draining("10.0.0.5:8000", "default")
+
+
+def test_want_draining_does_not_touch_state_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drain is transitional — state file represents intended membership."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    BackendState(mgr.state_dir, mgr.lb.host, pool="default").add("10.0.0.5:8000")
+
+    mock_client = MagicMock()
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    r.want_draining("10.0.0.5:8000", "default")
+
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert "10.0.0.5:8000" in bs.list()

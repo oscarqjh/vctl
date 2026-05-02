@@ -173,3 +173,82 @@ class Reconciler:
         if in_haproxy and not in_state:
             return Outcome(ep=ep, pool=pool, action=Action.ADOPTED)
         return Outcome(ep=ep, pool=pool, action=Action.READIED)
+
+    def want_absent(self, ep: str, pool: str) -> Outcome:
+        """Ensure ep is removed from haproxy and from the state file.
+
+        Invariant: state file is only written after haproxy ack.
+
+        Action mapping based on pre-state:
+          not in_haproxy and not in_state → NONE (nothing to do)
+              in_haproxy and     in_state → REMOVED
+              in_haproxy and not in_state → REMOVED (state was already absent)
+          not in_haproxy and     in_state → ORPHANED_CLEANED (state file cleaned)
+
+        Raises:
+          PoolNotFound: if pool is not in mgr.lb.pools.
+          LbUnreachable: if both unix socket and TCP admin are unreachable.
+          BackendOpFailed: if haproxy admin command raises RuntimeError.
+        """
+        self._validate_pool(pool)
+        backend_section = f"pool_{pool}"
+
+        client = lb_admin_client(self.mgr)
+        if client is None:
+            raise LbUnreachable(
+                sock=str(self.mgr.sock_path),
+                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
+            )
+
+        haproxy_map = self._haproxy_servers(backend_section, client)
+        in_haproxy = ep in haproxy_map
+        in_state = ep in BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).list()
+
+        if not in_haproxy and not in_state:
+            return Outcome(ep=ep, pool=pool, action=Action.NONE)
+
+        if in_haproxy:
+            try:
+                client.set_state(backend_section, _name_for(ep), "maint")
+                client.remove_server(backend_section, _name_for(ep))
+            except RuntimeError as exc:
+                raise BackendOpFailed(
+                    op="set_state/remove_server", ep=ep, backend=backend_section
+                ) from exc
+
+        if in_state:
+            BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).remove(ep)
+
+        if not in_haproxy and in_state:
+            return Outcome(ep=ep, pool=pool, action=Action.ORPHANED_CLEANED)
+        return Outcome(ep=ep, pool=pool, action=Action.REMOVED)
+
+    def want_draining(self, ep: str, pool: str) -> Outcome:
+        """Set ep to drain state in haproxy. State file is NOT modified.
+
+        Drain is a transitional haproxy admin state indicating the server should
+        complete in-flight requests and accept no new ones. The state file
+        represents intended membership (present or absent), not transient drain
+        state. Calling want_present after want_draining will re-ready the server.
+
+        Raises:
+          PoolNotFound: if pool is not in mgr.lb.pools.
+          LbUnreachable: if both unix socket and TCP admin are unreachable.
+          BackendOpFailed: if set_state raises RuntimeError (e.g. server not found).
+        """
+        self._validate_pool(pool)
+        backend_section = f"pool_{pool}"
+
+        client = lb_admin_client(self.mgr)
+        if client is None:
+            raise LbUnreachable(
+                sock=str(self.mgr.sock_path),
+                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
+            )
+
+        try:
+            client.set_state(backend_section, _name_for(ep), "drain")
+        except RuntimeError as exc:
+            raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
+
+        return Outcome(ep=ep, pool=pool, action=Action.DRAINED)
