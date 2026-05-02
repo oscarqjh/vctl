@@ -11,7 +11,7 @@ import time
 
 from vctl.lb.manager import LbManager
 from vctl.lb.probe import probe_local_vllm, probe_vllm
-from vctl.lb.routing import pool_for_endpoint
+from vctl.lb.routing import _name_for, pool_for_endpoint
 from vctl.lb.runtime import RuntimeClient
 from vctl.lb.state import BackendState
 from vctl.platform import detect_self_ip
@@ -54,10 +54,6 @@ def _client(mgr: LbManager) -> RuntimeClient | None:
         return RuntimeClient.for_tcp(mgr.lb.host, mgr.lb.admin.bind_port)
     except OSError:
         return None
-
-
-def _name_for(ep: str) -> str:
-    return "b_" + ep.replace(".", "_").replace(":", "_")
 
 
 def dispatch(

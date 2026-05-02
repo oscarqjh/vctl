@@ -56,3 +56,8 @@ def pool_for_endpoint(lb: LbHaproxy, ep: str, *, timeout: float = 3.0) -> Pool:
         print(f"{ep}: model not loaded (/v1/models returned empty data)", file=sys.stderr)
         sys.exit(1)
     return pool_for_model(lb, data[0]["id"])
+
+
+def _name_for(ep: str) -> str:
+    """Derive HAProxy server name from endpoint: replace dots/colons with underscores, prefix 'b_'."""
+    return "b_" + ep.replace(".", "_").replace(":", "_")
