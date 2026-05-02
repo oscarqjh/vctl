@@ -199,9 +199,11 @@ def _make_mgr(tmp_path: Path, lb: LbHaproxy | None = None) -> LbManager:
 def test_do_drain_exits_4_when_lb_unreachable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A4: _do_drain must return 4 (not 0) when _client returns None."""
+    """A4: _do_drain must return 4 when LB admin socket unreachable."""
+    import vctl.lb.reconciler as reconciler_mod
+
     mgr = _make_mgr(tmp_path)
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: None)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
     rc = lb_scaling._do_drain("10.0.0.5:8000", mgr, pool_name="default")
     assert rc == 4
 
@@ -209,10 +211,12 @@ def test_do_drain_exits_4_when_lb_unreachable(
 def test_do_drain_succeeds_when_cli_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A4 inverse: _do_drain returns 0 when client is present."""
+    """A4 inverse: _do_drain returns 0 when LB admin socket reachable."""
+    import vctl.lb.reconciler as reconciler_mod
+
     mgr = _make_mgr(tmp_path)
     cli = MagicMock()
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
     rc = lb_scaling._do_drain("10.0.0.5:8000", mgr, pool_name="default")
     assert rc == 0
     cli.set_state.assert_called_once_with("pool_default", "b_10_0_0_5_8000", "drain")

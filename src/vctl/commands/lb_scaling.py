@@ -260,17 +260,12 @@ def _do_remove(ep: str, mgr: LbManager, bs: BackendState, pool_name: str | None 
 
 def _do_drain(ep: str, mgr: LbManager, pool_name: str | None = None) -> int:
     pool_name = _resolve_pool_name(mgr, pool_name)
-    backend_section = f"pool_{pool_name}"
-    cli = _client(mgr)
-    if cli is None:
-        # A4: unreachable socket → clear error, exit 4.
-        print(
-            f"LB admin socket unreachable at {mgr.sock_path} (and TCP"
-            f" {mgr.lb.host}:{mgr.lb.admin.bind_port}); cannot drain {ep}",
-            file=sys.stderr,
-        )
-        return 4
-    cli.set_state(backend_section, _name_for(ep), "drain")
+    try:
+        outcome = Reconciler(mgr).want_draining(ep, pool_name)
+    except ReconcilerError as exc:
+        print(f"drain {ep} failed: {exc}", file=sys.stderr)
+        return _exit_for(exc)
+    print(f"drain {ep} {outcome.action.name} (pool: {pool_name})", file=sys.stderr)
     return 0
 
 
