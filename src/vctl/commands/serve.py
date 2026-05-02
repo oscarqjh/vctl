@@ -95,10 +95,13 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         f"--port={rc.server.http_port}",
     ]
     for k, v in rc.vllm_args.items():
+        # vLLM uses argparse BooleanOptionalAction for boolean flags
+        # (e.g. --enable-prefix-caching / --no-enable-prefix-caching).
+        # `--flag=true` is rejected with "ignored explicit argument 'true'".
         if v is True:
-            cmd.append(f"--{k}=true")
+            cmd.append(f"--{k}")
         elif v is False:
-            cmd.append(f"--{k}=false")
+            cmd.append(f"--no-{k}")
         else:
             cmd.append(f"--{k}={v}")
 

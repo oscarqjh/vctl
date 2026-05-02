@@ -7,10 +7,6 @@ import argparse
 from vctl.resolver import resolve
 
 
-def _bool_flag(value: object) -> str:
-    return "true" if value else "false"
-
-
 def _build_subparser() -> argparse.ArgumentParser:
     return argparse.ArgumentParser(
         prog="vctl args",
@@ -32,8 +28,12 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         f"--port={rc.server.http_port}",
     ]
     for k, v in rc.vllm_args.items():
-        if isinstance(v, bool):
-            out.append(f"--{k}={_bool_flag(v)}")
+        # vLLM uses BooleanOptionalAction: bare `--flag` / `--no-flag`,
+        # not `--flag=true`. Match serve.py emission.
+        if v is True:
+            out.append(f"--{k}")
+        elif v is False:
+            out.append(f"--no-{k}")
         else:
             out.append(f"--{k}={v}")
     print("\n".join(out))

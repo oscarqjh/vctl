@@ -62,11 +62,29 @@ def test_args_cmd_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> Non
     assert "--port=" in out
 
 
-def test_bool_flag() -> None:
-    from vctl.commands.args_cmd import _bool_flag
+def test_args_emits_bare_bool_flags(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """vllm BooleanOptionalAction: emit `--flag` / `--no-flag`, not `--flag=true`."""
+    from vctl.commands import args_cmd
 
-    assert _bool_flag(True) == "true"
-    assert _bool_flag(False) == "false"
+    fix = Path(__file__).parent / "fixtures"
+    (tmp_path / "cluster.yaml").write_text((fix / "sample_cluster.yaml").read_text())
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "qwen3-9b.yaml").write_text(
+        "apiVersion: vctl/v1\nkind: Profile\n"
+        "model: { name: Qwen/Qwen3.5-9B, served_as: qwen3-9b }\n"
+        "resources: { num_gpus: 8, cuda_visible_devices: \"0,1,2,3,4,5,6,7\" }\n"
+        "parallelism: { data_parallel: 8, tensor_parallel: 1, api_server_count: 8 }\n"
+        "server: { http_port: 8000 }\n"
+        "vllm_args: { enable-prefix-caching: true, enable-debug: false, reasoning-parser: qwen3 }\n"
+    )
+    ns = argparse.Namespace(
+        config=str(tmp_path / "cluster.yaml"), profile="qwen3-9b", log_level="info",
+    )
+    args_cmd.run(ns, [])
+    out = capsys.readouterr().out
+    assert "--enable-prefix-caching" in out
+    assert "--enable-prefix-caching=true" not in out
+    assert "--no-enable-debug" in out
 
 
 # ---------------------------------------------------------------------------

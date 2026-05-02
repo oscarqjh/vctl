@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.7] - 2026-05-02
+
+### Fixed
+- **Boolean vllm flags now emit BooleanOptionalAction-compatible form.**
+  Previously `vllm_args: { enable-prefix-caching: true }` produced
+  `--enable-prefix-caching=true`, which vllm rejects with
+  `"ignored explicit argument 'true'"`. Now emits bare `--enable-prefix-caching`
+  for true, `--no-enable-prefix-caching` for false. Affects both
+  `vctl serve` (subprocess argv) and `vctl args` (printed flags).
+
 ## [0.2.6] - 2026-05-02
 
 ### Fixed
