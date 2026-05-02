@@ -9,8 +9,10 @@ import os
 import sys
 import time
 
+from vctl.lb.errors import BackendOpFailed, LbUnreachable, PoolNotFound, ReconcilerError
 from vctl.lb.manager import LbManager
 from vctl.lb.probe import probe_local_vllm, probe_vllm
+from vctl.lb.reconciler import Action, Reconciler
 from vctl.lb.routing import _name_for, pool_for_endpoint
 from vctl.lb.runtime import RuntimeClient, _NoOpClient
 from vctl.lb.runtime import lb_admin_client as _client
@@ -27,6 +29,20 @@ _LOG = logging.getLogger(__name__)
 #   2. `monkeypatch.setattr(lb_scaling, "_client", ...)` in existing tests
 #      keeps working unchanged after the Phase 1 extraction.
 __all__ = ["_NoOpClient", "_client", "RuntimeClient", "_name_for"]
+
+
+def _exit_for(exc: ReconcilerError) -> int:
+    """Map a ReconcilerError subclass to a CLI exit code.
+
+    LbUnreachable  → 4  (environment error: LB socket down)
+    PoolNotFound   → 3  (user error: unknown pool name)
+    BackendOpFailed and any future ReconcilerError subclass → 1  (generic failure)
+    """
+    if isinstance(exc, LbUnreachable):
+        return 4
+    if isinstance(exc, PoolNotFound):
+        return 3
+    return 1
 
 
 def dispatch(

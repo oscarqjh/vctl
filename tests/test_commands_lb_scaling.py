@@ -12,6 +12,7 @@ import pytest
 
 from vctl.commands import lb_scaling
 from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+from vctl.lb.errors import BackendOpFailed, LbUnreachable, PoolNotFound, ReconcilerError
 from vctl.lb.manager import LbManager
 from vctl.lb.state import BackendState
 
@@ -222,9 +223,7 @@ def test_do_drain_succeeds_when_cli_available(
 # ---------------------------------------------------------------------------
 
 
-def test_do_add_propagates_haproxy_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_do_add_propagates_haproxy_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A5: _do_add must return non-zero when haproxy add_server fails with a
     non-idempotent error (not 'already exists')."""
     state_dir = tmp_path / "state"
@@ -257,9 +256,7 @@ def test_do_add_idempotent_already_exists_is_ok(
     assert rc == 0
 
 
-def test_do_add_no_such_backend_exits_3(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_do_add_no_such_backend_exits_3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A5: 'No such backend' error → exit 3 (user error)."""
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
@@ -335,9 +332,7 @@ def test_do_remove_state_unchanged_when_del_server_fails(
     assert "10.0.0.5:8000" in bs.list()
 
 
-def test_do_remove_happy_path_ordering(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_do_remove_happy_path_ordering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A6: on success, calls set_state maint then remove_server then bs.remove."""
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
@@ -362,9 +357,7 @@ def test_do_remove_happy_path_ordering(
 # ---------------------------------------------------------------------------
 
 
-def test_do_auto_add_calls_force_ready(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_do_auto_add_calls_force_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A7: _do_auto_add must call set_state ready after add_server."""
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
@@ -462,3 +455,31 @@ def test_do_remove_cli_returns_1_no_socket_and_not_found(
 
     rc = lb_scaling._do_remove_cli("10.0.0.5:8000", mgr, bs)
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 1: _exit_for helper — exit-code mapping
+# ---------------------------------------------------------------------------
+
+
+def test_exit_for_lb_unreachable_returns_4() -> None:
+    exc = LbUnreachable(sock="/run/haproxy.sock", tcp="10.0.0.1:9001")
+    assert lb_scaling._exit_for(exc) == 4
+
+
+def test_exit_for_pool_not_found_returns_3() -> None:
+    exc = PoolNotFound(requested="nonexistent", available=["default"])
+    assert lb_scaling._exit_for(exc) == 3
+
+
+def test_exit_for_backend_op_failed_returns_1() -> None:
+    exc = BackendOpFailed(op="add_server", ep="10.0.0.5:8000", backend="pool_default")
+    assert lb_scaling._exit_for(exc) == 1
+
+
+def test_exit_for_arbitrary_reconciler_error_subclass_returns_1() -> None:
+    class _UnknownError(ReconcilerError):
+        pass
+
+    exc = _UnknownError("unknown haproxy failure")
+    assert lb_scaling._exit_for(exc) == 1
