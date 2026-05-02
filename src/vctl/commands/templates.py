@@ -125,8 +125,10 @@ parallelism:
   # Tensor-parallel slices within each engine. data_parallel * tensor_parallel
   # must equal num_gpus.
   tensor_parallel: 1
-  # Number of API-server workers. Default: data_parallel.
-  api_server_count: 8
+  # Number of OpenAI API-server workers. Keep at 1 unless you've measured
+  # the HTTP frontend (not the GPU) as the bottleneck. >1 with shared NFS
+  # cache directories triggers FlashInfer FileLock contention.
+  api_server_count: 1
 
 server:
   # Listening port for vllm OpenAI-compatible API.
@@ -168,7 +170,7 @@ parallelism:
   # MoE 30B fits comfortably on 8x80GB with TP=2 inside each DP rank.
   data_parallel: 4
   tensor_parallel: 2
-  api_server_count: 4
+  api_server_count: 1
 
 server:
   http_port: 8000

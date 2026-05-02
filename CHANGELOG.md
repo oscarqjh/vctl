@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.11] - 2026-05-02
+
+### Changed
+- **Built-in profile templates default `api_server_count: 1`** (was 8 / 4).
+  When the OpenAI HTTP layer is run with multiple api-server workers AND
+  the cache directories live on a shared/NFS filesystem, FlashInfer's
+  FileLock-based compile cache deadlocks across api-server processes.
+  Symptom: vllm crashes mid-request with `Deadlock: lock '...gdn_prefill_sm90.lock'
+  is already held by a different FileLock instance`. 1 worker per backend
+  is the right default; bump only after measuring the HTTP frontend (not GPU)
+  as the bottleneck. Comment in templates updated to explain.
+
 ## [0.2.10] - 2026-05-02
 
 ### Fixed
