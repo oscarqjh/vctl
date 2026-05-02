@@ -7,7 +7,7 @@ class ReconcilerError(Exception):
     """Base class for all Reconciler hard failures."""
 
 
-class LbUnreachable(ReconcilerError):
+class LbUnreachable(ReconcilerError):  # noqa: N818  # spec contract: naked descriptive name
     """Raised when both the unix socket and TCP admin port are unreachable.
 
     Carries the socket path and TCP address so callers can surface a clear
@@ -20,7 +20,7 @@ class LbUnreachable(ReconcilerError):
         super().__init__(f"LB admin socket unreachable: sock={sock}, tcp={tcp}")
 
 
-class PoolNotFound(ReconcilerError):
+class PoolNotFound(ReconcilerError):  # noqa: N818  # spec contract: naked descriptive name
     """Raised when the caller supplies a pool name not present in the LB config."""
 
     def __init__(self, *, requested: str, available: list[str]) -> None:
@@ -29,7 +29,7 @@ class PoolNotFound(ReconcilerError):
         super().__init__(f"pool {requested!r} not found; available pools: {available}")
 
 
-class BackendOpFailed(ReconcilerError):
+class BackendOpFailed(ReconcilerError):  # noqa: N818  # spec contract: naked descriptive name
     """Raised when a haproxy admin command raises RuntimeError.
 
     The original RuntimeError is attached as ``__cause__`` by the Reconciler.
