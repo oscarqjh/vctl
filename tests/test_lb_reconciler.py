@@ -153,6 +153,45 @@ def test_haproxy_servers_empty_when_no_rows(tmp_path: Path) -> None:
     assert r._haproxy_servers("pool_default", mock_client) == {}
 
 
+def test_haproxy_servers_filters_by_section(tmp_path: Path) -> None:
+    """v0.4.1: rows with a populated backend column are filtered to the given section.
+    Rows from other pools are excluded."""
+    mgr = _make_mgr(tmp_path, pool_names=["default", "gpu"])
+    r = Reconciler(mgr)
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = [
+        BackendStatus(
+            name="b_10_0_0_5_8000",
+            endpoint="10.0.0.5:8000",
+            op_state=2,
+            backend="pool_default",
+        ),
+        BackendStatus(
+            name="b_10_0_0_6_8000",
+            endpoint="10.0.0.6:8000",
+            op_state=2,
+            backend="pool_gpu",
+        ),
+    ]
+    result = r._haproxy_servers("pool_default", mock_client)
+    assert set(result.keys()) == {"10.0.0.5:8000"}
+    assert result["10.0.0.5:8000"].backend == "pool_default"
+
+
+def test_haproxy_servers_includes_unfiltered_when_backend_empty(tmp_path: Path) -> None:
+    """Rows with empty backend (legacy haproxy / _NoOpClient stub) pass through unfiltered."""
+    mgr = _make_mgr(tmp_path, pool_names=["default"])
+    r = Reconciler(mgr)
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2),  # backend=""
+    ]
+    result = r._haproxy_servers("pool_default", mock_client)
+    assert "10.0.0.5:8000" in result
+
+
 # ---------------------------------------------------------------------------
 # Task 6: diff(pool) and diff_all()
 # ---------------------------------------------------------------------------

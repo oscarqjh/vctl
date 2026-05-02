@@ -27,6 +27,7 @@ class BackendStatus:
     endpoint: str
     op_state: int
     admin_state: int = 0
+    backend: str = ""  # backend section name from `show servers state` parts[1]
 
     @property
     def op(self) -> Literal["UP", "DOWN"]:
@@ -151,6 +152,7 @@ class RuntimeClient:
             if len(parts) >= 7:
                 with contextlib.suppress(ValueError):
                     admin_state = int(parts[6])
+            backend = parts[1]
             name = parts[3]
             srv_addr = parts[4]
             # B8: prefer IP decoded from name; skip rows where srv_addr=0.0.0.0
@@ -168,6 +170,7 @@ class RuntimeClient:
                     endpoint=endpoint,
                     op_state=op_state,
                     admin_state=admin_state,
+                    backend=backend,
                 )
             )
         return rows

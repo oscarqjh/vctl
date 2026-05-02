@@ -84,20 +84,20 @@ class Reconciler:
         return client
 
     def _haproxy_servers(self, section: str, client: RuntimeClient) -> dict[str, BackendStatus]:
-        """Return {endpoint: BackendStatus} for live haproxy server rows.
+        """Return {endpoint: BackendStatus} for live haproxy server rows in *section*.
 
-        HAProxy's ``show servers state`` does not include the backend section
-        name per row in all versions, so filtering by ``section`` is currently
-        a no-op — all rows are returned keyed by endpoint. Callers that want
-        per-pool semantics rely on the ``b_<ip>_<port>`` naming convention
-        plus their own state-file scope to associate rows with pools.
-
-        The ``section`` argument is retained for documentation and to make
-        the eventual filtering upgrade a no-op for callers.
+        Filters `show servers state` rows to those whose backend column matches
+        the supplied section name (e.g. ``pool_default``). Rows without a backend
+        column populated (legacy haproxy versions or test stubs) are included
+        unfiltered so callers running against older haproxy or `_NoOpClient`
+        keep working.
         """
-        del section  # reserved for future filtering
         rows = client.show_servers_state()
-        return {row.endpoint: row for row in rows}
+        return {
+            row.endpoint: row
+            for row in rows
+            if not row.backend or row.backend == section
+        }
 
     # ---- read-only API ----
 
