@@ -11,53 +11,22 @@ import time
 
 from vctl.lb.manager import LbManager
 from vctl.lb.probe import probe_local_vllm, probe_vllm
-from vctl.lb.routing import pool_for_endpoint
-from vctl.lb.runtime import RuntimeClient
+from vctl.lb.routing import _name_for, pool_for_endpoint
+from vctl.lb.runtime import RuntimeClient, _NoOpClient
+from vctl.lb.runtime import lb_admin_client as _client
 from vctl.lb.state import BackendState
 from vctl.platform import detect_self_ip
 
 _LOG = logging.getLogger(__name__)
 
-
-class _NoOpClient:
-    """Drop-in stub for RuntimeClient used when VCTL_TEST_NO_SOCKET=1.
-
-    All haproxy admin operations succeed silently so tests that don't care
-    about haproxy interactions still pass.  Tests that *do* want to assert
-    on haproxy calls should monkeypatch ``_client`` directly to inject a
-    ``unittest.mock.MagicMock``.
-    """
-
-    def add_server(self, backend: str, name: str, ep: str) -> str:
-        return "new"
-
-    def remove_server(self, backend: str, name: str) -> None:
-        pass
-
-    def set_state(self, backend: str, name: str, state: str) -> None:
-        pass
-
-
-def _client(mgr: LbManager) -> RuntimeClient | None:
-    if os.environ.get("VCTL_TEST_NO_SOCKET") == "1":
-        return _NoOpClient()  # type: ignore[return-value]
-    sock = mgr.sock_path
-    # On a worker with shared/NFS-mounted home, the unix socket FILE may exist
-    # but connect() fails because the socket is bound on a different host.
-    # If unix connect fails, fall through to TCP instead of giving up.
-    if sock.exists():
-        try:
-            return RuntimeClient.for_unix(str(sock))
-        except OSError:
-            pass  # NFS mirage; fall through to TCP
-    try:
-        return RuntimeClient.for_tcp(mgr.lb.host, mgr.lb.admin.bind_port)
-    except OSError:
-        return None
-
-
-def _name_for(ep: str) -> str:
-    return "b_" + ep.replace(".", "_").replace(":", "_")
+# Explicit re-export declaration for mypy --strict (and a marker for readers).
+# The canonical implementations live in vctl.lb.runtime / vctl.lb.routing;
+# they are imported above and surfaced here so:
+#   1. mypy treats `from vctl.commands.lb_scaling import _client` (used in
+#      vctl.commands.lb) as an explicit re-export, not an attr-defined error.
+#   2. `monkeypatch.setattr(lb_scaling, "_client", ...)` in existing tests
+#      keeps working unchanged after the Phase 1 extraction.
+__all__ = ["_NoOpClient", "_client", "RuntimeClient", "_name_for"]
 
 
 def dispatch(

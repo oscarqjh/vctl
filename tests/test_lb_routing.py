@@ -12,7 +12,7 @@ from vctl.config.models import (
     LbStats,
     Pool,
 )
-from vctl.lb.routing import pool_for_endpoint, pool_for_model
+from vctl.lb.routing import _name_for, pool_for_endpoint, pool_for_model
 
 
 def _two_pool_lb() -> LbHaproxy:
@@ -107,3 +107,14 @@ def test_pool_for_endpoint_probe_failure_exits_3(monkeypatch, capsys) -> None:
     assert exc.value.code == 3
     err = capsys.readouterr().err
     assert "probe" in err.lower()
+
+
+def test_name_for_derives_server_name() -> None:
+    assert _name_for("10.0.0.5:8000") == "b_10_0_0_5_8000"
+
+
+def test_name_for_importable_from_routing() -> None:
+    # Verify the symbol is importable from routing (not just lb_scaling)
+    from vctl.lb.routing import _name_for as nf
+
+    assert nf("192.168.1.10:9000") == "b_192_168_1_10_9000"

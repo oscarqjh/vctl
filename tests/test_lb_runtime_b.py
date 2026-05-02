@@ -5,10 +5,17 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from vctl.lb.runtime import RuntimeClient, _parse_endpoint_from_name
+from vctl.lb.runtime import (
+    RuntimeClient,
+    _NoOpClient,
+    _parse_endpoint_from_name,
+    lb_admin_client,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -160,8 +167,7 @@ def test_show_servers_state_skips_0_0_0_0_unparseable_name() -> None:
     """B8: srv_addr=0.0.0.0 and name doesn't parse → row skipped."""
     a, b = socket.socketpair()
     payload = (
-        b"# be_id be_name srv_id srv_name srv_addr srv_op_state\n"
-        b"1 pool 1 bad_name 0.0.0.0 2\n\n"
+        b"# be_id be_name srv_id srv_name srv_addr srv_op_state\n1 pool 1 bad_name 0.0.0.0 2\n\n"
     )
     threading.Thread(target=_serve_replies, args=(b, [payload]), daemon=True).start()
     rc = RuntimeClient.for_unix_fd(a)
@@ -180,3 +186,54 @@ def test_parse_endpoint_from_name_invalid() -> None:
     assert _parse_endpoint_from_name("bad_name") is None
     assert _parse_endpoint_from_name("b_10_0_0") is None  # only 3 octets + no port
     assert _parse_endpoint_from_name("b_10_0_0_1") is None  # no port segment
+
+
+# ---------------------------------------------------------------------------
+# lb_admin_client + _NoOpClient (extracted from lb_scaling.py for Reconciler)
+# ---------------------------------------------------------------------------
+
+
+def _make_mgr(tmp_path: Path) -> MagicMock:
+    mgr = MagicMock()
+    mgr.sock_path = tmp_path / "haproxy.sock"  # does not exist
+    mgr.lb.host = "127.0.0.1"
+    mgr.lb.admin.bind_port = 9999
+    return mgr
+
+
+def test_lb_admin_client_returns_noop_when_test_env_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VCTL_TEST_NO_SOCKET", "1")
+    mgr = _make_mgr(tmp_path)
+    client = lb_admin_client(mgr)
+    assert isinstance(client, _NoOpClient)
+
+
+def test_lb_admin_client_returns_none_when_both_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VCTL_TEST_NO_SOCKET", raising=False)
+    mgr = _make_mgr(tmp_path)
+    client = lb_admin_client(mgr)
+    assert client is None
+
+
+def test_noop_client_add_server_returns_new() -> None:
+    c = _NoOpClient()
+    assert c.add_server("pool_default", "b_10_0_0_5_8000", "10.0.0.5:8000") == "new"
+
+
+def test_noop_client_remove_server_is_silent() -> None:
+    c = _NoOpClient()
+    c.remove_server("pool_default", "b_10_0_0_5_8000")  # must not raise
+
+
+def test_noop_client_set_state_is_silent() -> None:
+    c = _NoOpClient()
+    c.set_state("pool_default", "b_10_0_0_5_8000", "ready")  # must not raise
+
+
+def test_noop_client_show_servers_state_returns_empty() -> None:
+    c = _NoOpClient()
+    assert c.show_servers_state() == []
