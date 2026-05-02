@@ -90,11 +90,13 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         else:
             env[k] = str(v)
 
+    # Don't pass --served-model-name; vllm defaults to model.name (the canonical
+    # HF id), which matches our pool routing key. Setting it explicitly is
+    # redundant and was a footgun when paired with profile served_as aliases.
     cmd = [
         "vllm",
         "serve",
         rc.model.name,
-        f"--served-model-name={rc.model.name}",
         f"--data-parallel-size={rc.parallelism.data_parallel}",
         f"--tensor-parallel-size={rc.parallelism.tensor_parallel}",
         f"--api-server-count={rc.parallelism.api_server_count}",

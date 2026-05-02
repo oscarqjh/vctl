@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.13] - 2026-05-02
+
+### Removed
+- **`--served-model-name=` is no longer emitted** by `vctl serve` /
+  `vctl args`. vllm defaults to `model.name` when not passed, which is the
+  canonical HF id and matches our pool routing key. Setting it explicitly
+  was redundant after v0.2.8 dropped the `served_as` alias mechanism.
+
 ## [0.2.12] - 2026-05-02
 
 ### Fixed

@@ -19,9 +19,10 @@ def _build_subparser() -> argparse.ArgumentParser:
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     _build_subparser().parse_args(argv_rest)
     rc = resolve(ns.config, profile=ns.profile)
+    # Don't include --served-model-name; vllm defaults to model.name. Mirrors
+    # serve.py emission.
     out: list[str] = [
         rc.model.name,
-        f"--served-model-name={rc.model.name}",
         f"--data-parallel-size={rc.parallelism.data_parallel}",
         f"--tensor-parallel-size={rc.parallelism.tensor_parallel}",
         f"--api-server-count={rc.parallelism.api_server_count}",
