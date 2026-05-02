@@ -511,7 +511,7 @@ def test_d12_bool_env_serialized_lowercase(tmp_path: Path) -> None:
     (tmp_path / "models" / "qwen3-9b.yaml").write_text(
         "apiVersion: vctl/v1\n"
         "kind: Profile\n"
-        "model: { name: Qwen/Qwen3.5-9B, served_as: qwen3-9b }\n"
+        "model: { name: Qwen/Qwen3.5-9B }\n"
         "resources: { num_gpus: 8, cuda_visible_devices: '0,1,2,3,4,5,6,7' }\n"
         "parallelism: { data_parallel: 8, tensor_parallel: 1, api_server_count: 8 }\n"
         "server: { http_port: 8000 }\n"

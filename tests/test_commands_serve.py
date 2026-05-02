@@ -96,7 +96,7 @@ def _make_two_pool_repo(tmp_path: Path) -> Path:
     (tmp_path / "models" / "a.yaml").write_text(
         "apiVersion: vctl/v1\n"
         "kind: Profile\n"
-        "model: { name: 'M/A', served_as: a }\n"
+        "model: { name: 'M/A' }\n"
         "resources: { num_gpus: 1, cuda_visible_devices: '0' }\n"
         "parallelism: { data_parallel: 1, tensor_parallel: 1, api_server_count: 1 }\n"
         "server: { http_port: 8000 }\n"
@@ -106,7 +106,7 @@ def _make_two_pool_repo(tmp_path: Path) -> Path:
     (tmp_path / "models" / "b.yaml").write_text(
         "apiVersion: vctl/v1\n"
         "kind: Profile\n"
-        "model: { name: 'M/B', served_as: b }\n"
+        "model: { name: 'M/B' }\n"
         "resources: { num_gpus: 1, cuda_visible_devices: '0' }\n"
         "parallelism: { data_parallel: 1, tensor_parallel: 1, api_server_count: 1 }\n"
         "server: { http_port: 8001 }\n"
@@ -228,7 +228,7 @@ def test_serve_fails_fast_when_no_matching_pool(tmp_path: Path) -> None:
     repo = _make_two_pool_repo(tmp_path)  # pools serve M/A and M/B
     (repo / "models" / "x.yaml").write_text(
         "apiVersion: vctl/v1\nkind: Profile\n"
-        "model: { name: M/X, served_as: x }\n"
+        "model: { name: M/X }\n"
         "resources: { num_gpus: 1, cuda_visible_devices: '0' }\n"
         "parallelism: { data_parallel: 1, tensor_parallel: 1, api_server_count: 1 }\n"
         "server: { http_port: 8000 }\n"

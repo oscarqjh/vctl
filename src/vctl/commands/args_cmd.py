@@ -21,7 +21,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     rc = resolve(ns.config, profile=ns.profile)
     out: list[str] = [
         rc.model.name,
-        f"--served-model-name={rc.model.served_as}",
+        f"--served-model-name={rc.model.name}",
         f"--data-parallel-size={rc.parallelism.data_parallel}",
         f"--tensor-parallel-size={rc.parallelism.tensor_parallel}",
         f"--api-server-count={rc.parallelism.api_server_count}",

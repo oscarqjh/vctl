@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+_LOG = logging.getLogger(__name__)
 
 ApiVersion = Literal["vctl/v1"]
 
@@ -155,7 +158,27 @@ class Server(_Strict):
 
 class Model(_Strict):
     name: str
-    served_as: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_deprecated_served_as(cls, data: Any) -> Any:
+        """Backwards-compat shim: silently drop `served_as` from old profiles.
+
+        With ``extra="forbid"`` on ``_Strict``, leaving ``served_as:`` in an
+        existing profile YAML would crash schema load.  Pop it here (before the
+        field-level validation runs) and emit a one-time deprecation warning so
+        operators know to clean their files at leisure.
+        """
+        if isinstance(data, dict) and "served_as" in data:
+            _LOG.warning(
+                "model.served_as is deprecated and ignored; "
+                "vllm is now always served under model.name (%s). "
+                "Remove served_as from your profile YAML.",
+                data.get("name", "<unknown>"),
+            )
+            data = dict(data)
+            data.pop("served_as")
+        return data
 
 
 class ClusterFile(BaseModel):

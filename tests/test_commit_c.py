@@ -69,7 +69,7 @@ def test_c1_profile_extra_key_rejected() -> None:
     base = {
         "apiVersion": "vctl/v1",
         "kind": "Profile",
-        "model": {"name": "M/A", "served_as": "a"},
+        "model": {"name": "M/A"},
         "resources": {"num_gpus": 1, "cuda_visible_devices": "0"},
         "parallelism": {"data_parallel": 1, "tensor_parallel": 1, "api_server_count": 1},
         "profile": "this-should-not-be-here",  # stray key (only in ClusterFile)
@@ -373,7 +373,7 @@ def _make_two_pool_repo(tmp_path: Path) -> Path:
     (tmp_path / "models").mkdir()
     (tmp_path / "models" / "a.yaml").write_text(
         "apiVersion: vctl/v1\nkind: Profile\n"
-        "model: {name: M/A, served_as: a}\n"
+        "model: {name: M/A}\n"
         "resources: {num_gpus: 1, cuda_visible_devices: '0'}\n"
         "parallelism: {data_parallel: 1, tensor_parallel: 1, api_server_count: 1}\n"
         "server: {http_port: 8000}\nvllm_args: {}\nenv: {}\n"

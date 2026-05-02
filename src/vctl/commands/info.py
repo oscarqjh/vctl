@@ -22,7 +22,6 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     rows = [
         ("profile", rc.profile_name),
         ("model", rc.model.name),
-        ("served_as", rc.model.served_as),
         ("self_ip", self_ip),
         ("dp / tp", f"{rc.parallelism.data_parallel} / {rc.parallelism.tensor_parallel}"),
         ("api_servers", str(rc.parallelism.api_server_count)),

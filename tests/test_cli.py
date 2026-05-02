@@ -90,7 +90,7 @@ def test_config_env_var_overrides_default(tmp_path, monkeypatch) -> None:
     (tmp_path / "models").mkdir()
     (tmp_path / "models" / "foo.yaml").write_text(
         "apiVersion: vctl/v1\nkind: Profile\n"
-        "model: { name: F, served_as: foo }\n"
+        "model: { name: F }\n"
         "resources: { num_gpus: 1, cuda_visible_devices: '0' }\n"
         "parallelism: { data_parallel: 1, tensor_parallel: 1, api_server_count: 1 }\n"
         "server: { http_port: 8000 }\nvllm_args: {}\nenv: {}\n"

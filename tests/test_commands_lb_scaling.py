@@ -105,7 +105,7 @@ def _make_two_pool_repo(tmp_path: Path) -> Path:
     for n, m in [("a", "M/A"), ("b", "M/B")]:
         (tmp_path / "models" / f"{n}.yaml").write_text(
             f"apiVersion: vctl/v1\nkind: Profile\n"
-            f"model: {{ name: {m}, served_as: {n} }}\n"
+            f"model: {{ name: {m} }}\n"
             f"resources: {{ num_gpus: 1, cuda_visible_devices: '0' }}\n"
             f"parallelism: {{ data_parallel: 1, tensor_parallel: 1, api_server_count: 1 }}\n"
             f"server: {{ http_port: 8000 }}\nvllm_args: {{}}\nenv: {{}}\n"

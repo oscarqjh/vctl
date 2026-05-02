@@ -60,13 +60,17 @@ def migrate_cluster(old: dict[str, Any]) -> NewDoc:
 
 def migrate_profile(old: dict[str, Any]) -> NewDoc:
     if old.get("apiVersion") == "vctl/v1" and old.get("kind") == "Profile":
+        # Already migrated: strip served_as if present (field removed in v0.2.8)
+        if "model" in old and isinstance(old["model"], dict) and "served_as" in old["model"]:
+            new = dict(old)
+            new["model"] = {k: v for k, v in old["model"].items() if k != "served_as"}
+            return new
         return old
     model_full = old.get("model", "")
-    served_as = model_full.split("/")[-1].lower().replace(".", "-") if model_full else ""
     return {
         "apiVersion": "vctl/v1",
         "kind": "Profile",
-        "model": {"name": model_full, "served_as": served_as},
+        "model": {"name": model_full},
         "resources": {
             "num_gpus": old.get("gpus", 0),
             "cuda_visible_devices": old.get("cuda_visible_devices", ""),

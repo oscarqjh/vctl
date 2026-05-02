@@ -3,6 +3,23 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.8] - 2026-05-01
+
+### Removed
+- **`model.served_as` field dropped.** vllm is now always served under
+  `model.name` (the canonical HuggingFace id, e.g. `Qwen/Qwen3.5-9B`).
+  Previously a profile could set `served_as: qwen3_5-9b` so vllm registered a
+  short name; clients sending the canonical id got a 404 "model does not
+  exist". The alias added no value when there is only one served name.
+  - `vctl serve` and `vctl args` now pass
+    `--served-model-name={model.name}` (always the canonical HF id).
+  - The `served_as:` line is removed from both built-in profile templates.
+  - `config migrate` strips `served_as` from any old-schema YAML it touches.
+  - **Backwards-compat:** a `model_validator(mode="before")` on `Model` pops
+    `served_as` from any pre-existing profile YAML and emits a deprecation
+    warning. Existing `~/.vctl/models/*.yaml` files keep loading — operators
+    can remove the field at leisure.
+
 ## [0.2.7] - 2026-05-02
 
 ### Fixed

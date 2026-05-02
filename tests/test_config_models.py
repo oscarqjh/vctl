@@ -85,7 +85,7 @@ def test_profile_file_happy_path() -> None:
         {
             "apiVersion": "vctl/v1",
             "kind": "Profile",
-            "model": {"name": "Qwen/Qwen3.5-9B", "served_as": "qwen3-9b"},
+            "model": {"name": "Qwen/Qwen3.5-9B"},
             "resources": {"num_gpus": 8, "cuda_visible_devices": "0,1,2,3,4,5,6,7"},
             "parallelism": {"data_parallel": 8, "tensor_parallel": 1, "api_server_count": 8},
             "server": {"http_port": 8000},
@@ -95,6 +95,38 @@ def test_profile_file_happy_path() -> None:
     )
     assert cf.parallelism.data_parallel == 8
     assert cf.vllm_args["reasoning-parser"] == "qwen3"
+    assert not hasattr(cf.model, "served_as")
+
+
+def test_served_as_deprecated_shim_drops_field_and_warns() -> None:
+    """Old profiles with served_as load fine; the field is silently dropped
+    (with a deprecation warning) by the model_validator shim."""
+    import logging
+
+    from vctl.config.models import Model
+
+    records: list[logging.LogRecord] = []
+
+    class _Cap(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Cap()
+    logger = logging.getLogger("vctl.config.models")
+    logger.addHandler(handler)
+    old_level = logger.level
+    logger.setLevel(logging.WARNING)
+    try:
+        m = Model.model_validate({"name": "Qwen/Qwen3.5-9B", "served_as": "qwen3-9b"})
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+
+    assert m.name == "Qwen/Qwen3.5-9B"
+    assert not hasattr(m, "served_as")
+    assert any("served_as" in r.getMessage() and "deprecated" in r.getMessage() for r in records), (
+        "expected deprecation warning in log records"
+    )
 
 
 def test_vllm_args_lenient() -> None:

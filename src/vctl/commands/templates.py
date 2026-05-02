@@ -110,10 +110,8 @@ kind: Profile
 
 model:
   # HuggingFace repo or local path.
+  # vllm is served under this canonical id (passed to --served-model-name).
   name: Qwen/Qwen3.5-9B
-  # OpenAI-compatible model_id exposed by `/v1/models`.
-  # `_` instead of `.` for shell-friendly filename / cli arg.
-  served_as: qwen3_5-9b
 
 resources:
   # Total GPUs to claim on the host.
@@ -161,7 +159,6 @@ kind: Profile
 
 model:
   name: Qwen/Qwen3-VL-30B-A3B-Thinking
-  served_as: qwen3-vl-30b-a3b
 
 resources:
   num_gpus: 8
