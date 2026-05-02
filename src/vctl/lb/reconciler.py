@@ -154,11 +154,15 @@ class Reconciler:
         Raises:
           PoolNotFound: if pool is not in mgr.lb.pools.
           LbUnreachable: if both unix socket and TCP admin are unreachable.
+            May also be raised mid-operation (after pre-state read but before
+            the second admin call) if the LB stops between commands. State
+            file is not written in that case — the caller can retry.
           BackendOpFailed: if haproxy admin command raises RuntimeError.
         """
         self._validate_pool(pool)
         backend_section = f"pool_{pool}"
 
+        # Pre-state read — fresh socket per command (see _acquire docstring).
         haproxy_map = self._haproxy_servers(backend_section, self._acquire())
         in_haproxy = ep in haproxy_map
         in_state = ep in BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).list()
@@ -197,11 +201,16 @@ class Reconciler:
         Raises:
           PoolNotFound: if pool is not in mgr.lb.pools.
           LbUnreachable: if both unix socket and TCP admin are unreachable.
+            May also be raised mid-operation (between set_state maint and
+            remove_server) if the LB stops between commands. State file is
+            not written in that case; haproxy may be left with the server
+            in maint state — the caller can retry to complete removal.
           BackendOpFailed: if haproxy admin command raises RuntimeError.
         """
         self._validate_pool(pool)
         backend_section = f"pool_{pool}"
 
+        # Pre-state read — fresh socket per command (see _acquire docstring).
         haproxy_map = self._haproxy_servers(backend_section, self._acquire())
         in_haproxy = ep in haproxy_map
         in_state = ep in BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).list()
@@ -212,11 +221,12 @@ class Reconciler:
         if in_haproxy:
             try:
                 self._acquire().set_state(backend_section, _name_for(ep), "maint")
+            except RuntimeError as exc:
+                raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
+            try:
                 self._acquire().remove_server(backend_section, _name_for(ep))
             except RuntimeError as exc:
-                raise BackendOpFailed(
-                    op="set_state/remove_server", ep=ep, backend=backend_section
-                ) from exc
+                raise BackendOpFailed(op="remove_server", ep=ep, backend=backend_section) from exc
 
         if in_state:
             BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).remove(ep)
@@ -259,6 +269,12 @@ class Reconciler:
 
         Fail-fast: acquires client once at the start; raises LbUnreachable
         immediately if the admin socket is unreachable before any mutations.
+
+        Performance note: opens 3*(N+M)+2 HAProxy admin socket connections
+        where N=len(target) and M=number of excess haproxy entries (each
+        want_present and want_absent opens 3 fresh sockets per the HAProxy
+        single-command-per-connection contract). Acceptable for startup
+        reconcile and lb auto-add; reconsider for tight-loop callers.
 
         Raises:
           PoolNotFound: if pool is not in mgr.lb.pools.

@@ -125,7 +125,14 @@ class RuntimeClient:
         raise RuntimeError(f"haproxy remove_server failed: {stripped}")
 
     def set_state(self, backend: str, name: str, state: Literal["ready", "maint", "drain"]) -> None:
-        self._send(f"set server {backend}/{name} state {state}")
+        # Empty response = success. Non-empty = error message from haproxy
+        # (e.g. "No such server.", "...already in maint mode."). Mirrors the
+        # parse-then-raise contract used by add_server and remove_server.
+        out = self._send(f"set server {backend}/{name} state {state}")
+        stripped = out.strip()
+        if not stripped:
+            return
+        raise RuntimeError(f"haproxy set_state failed: {stripped}")
 
     def show_servers_state(self) -> list[BackendStatus]:
         raw = self._send("show servers state")

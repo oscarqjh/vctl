@@ -370,8 +370,9 @@ def test_want_present_raises_backend_op_failed_and_leaves_state_untouched(
     monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
 
     r = Reconciler(mgr)
-    with pytest.raises(BackendOpFailed):
+    with pytest.raises(BackendOpFailed) as exc_info:
         r.want_present("10.0.0.5:8000", "default")
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
 
     bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
     assert bs.list() == []
@@ -523,8 +524,9 @@ def test_want_absent_raises_backend_op_failed_and_leaves_state_untouched(
     monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
 
     r = Reconciler(mgr)
-    with pytest.raises(BackendOpFailed):
+    with pytest.raises(BackendOpFailed) as exc_info:
         r.want_absent("10.0.0.5:8000", "default")
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
 
     bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
     assert "10.0.0.5:8000" in bs.list()
@@ -579,8 +581,9 @@ def test_want_draining_raises_backend_op_failed_for_unregistered(
     monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
 
     r = Reconciler(mgr)
-    with pytest.raises(BackendOpFailed):
+    with pytest.raises(BackendOpFailed) as exc_info:
         r.want_draining("10.0.0.5:8000", "default")
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
 def test_want_draining_does_not_touch_state_file(

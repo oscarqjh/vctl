@@ -19,9 +19,13 @@ from vctl.platform import detect_self_ip
 
 _LOG = logging.getLogger(__name__)
 
-# Re-export so existing imports `from vctl.commands.lb_scaling import _NoOpClient, _client`
-# continue to resolve. _NoOpClient and lb_admin_client (aliased to _client) live in
-# vctl.lb.runtime as the canonical home, shared with vctl.lb.reconciler.
+# Explicit re-export declaration for mypy --strict (and a marker for readers).
+# The canonical implementations live in vctl.lb.runtime / vctl.lb.routing;
+# they are imported above and surfaced here so:
+#   1. mypy treats `from vctl.commands.lb_scaling import _client` (used in
+#      vctl.commands.lb) as an explicit re-export, not an attr-defined error.
+#   2. `monkeypatch.setattr(lb_scaling, "_client", ...)` in existing tests
+#      keeps working unchanged after the Phase 1 extraction.
 __all__ = ["_NoOpClient", "_client", "RuntimeClient", "_name_for"]
 
 
