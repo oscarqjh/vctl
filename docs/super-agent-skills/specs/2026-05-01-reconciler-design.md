@@ -302,52 +302,52 @@ Concurrent `want_absent` calls are similarly safe: the second `remove_server` ca
 
 ## Acceptance Tests
 
-- [ ] `test: want_present registers ep in both haproxy and state file`
+- [x] `test: want_present registers ep in both haproxy and state file`
       Given: a running LB (mocked `_client` returning a `MagicMock` RuntimeClient) and an empty state file
       When: `Reconciler(mgr).want_present("10.0.0.5:8000", "default")` is called
       Then: `mock_client.add_server` was called with `("pool_default", "b_10_0_0_5_8000", "10.0.0.5:8000")`; `mock_client.set_state` was called with `("pool_default", "b_10_0_0_5_8000", "ready")`; the state file contains `"10.0.0.5:8000"`; the returned `Outcome.action` is `Action.ADDED`
 
-- [ ] `test: want_present raises LbUnreachable and leaves state file untouched`
+- [x] `test: want_present raises LbUnreachable and leaves state file untouched`
       Given: a stopped LB (mocked `_client` returning `None`) and an empty state file
       When: `Reconciler(mgr).want_present("10.0.0.5:8000", "default")` is called
       Then: `LbUnreachable` is raised; the state file does not exist or remains empty
 
-- [ ] `test: want_absent removes ep from haproxy first then from state file`
+- [x] `test: want_absent removes ep from haproxy first then from state file`
       Given: a running LB and a state file containing `"10.0.0.5:8000"` for pool `"default"`
       When: `Reconciler(mgr).want_absent("10.0.0.5:8000", "default")` is called
       Then: `mock_client.set_state` was called with `("pool_default", "b_10_0_0_5_8000", "maint")` before `BackendState.remove`; `mock_client.remove_server` was called with `("pool_default", "b_10_0_0_5_8000")`; the state file no longer contains `"10.0.0.5:8000"`; returned `Outcome.action` is `Action.REMOVED`
 
-- [ ] `test: mutating methods are idempotent — second call returns NONE or READIED`
+- [x] `test: mutating methods are idempotent — second call returns NONE or READIED`
       Given: a running LB and a state file already containing `"10.0.0.5:8000"` for pool `"default"` (first `want_present` already applied)
       When: `Reconciler(mgr).want_present("10.0.0.5:8000", "default")` is called a second time
       Then: no exception is raised; the state file still contains exactly one entry for `"10.0.0.5:8000"`; the returned `Outcome.action` is `Action.NONE` or `Action.READIED`
 
-- [ ] `test: diff returns Drift with lb_reachable=False and state membership populated`
+- [x] `test: diff returns Drift with lb_reachable=False and state membership populated`
       Given: a stopped LB (mocked `_client` returning `None`) and a state file containing `["10.0.0.5:8000", "10.0.0.6:8000"]` for pool `"default"`
       When: `Reconciler(mgr).diff("default")` is called
       Then: no exception is raised; the returned `Drift.lb_reachable` is `False`; `Drift.only_in_state` equals `["10.0.0.5:8000", "10.0.0.6:8000"]` (sorted); `Drift.only_in_haproxy` is `[]`; `Drift.statuses` is `{}`
 
-- [ ] `test: reconcile_pool converges haproxy and state to target set`
+- [x] `test: reconcile_pool converges haproxy and state to target set`
       Given: a running LB with haproxy currently reporting `["10.0.0.5:8000", "10.0.0.7:8000"]` in pool `"default"`, and a state file containing `["10.0.0.5:8000", "10.0.0.6:8000"]`
       When: `Reconciler(mgr).reconcile_pool("default", {"10.0.0.5:8000", "10.0.0.6:8000"})` is called
       Then: `want_present` was invoked for `"10.0.0.5:8000"` and `"10.0.0.6:8000"`; `want_absent` was invoked for `"10.0.0.7:8000"`; the state file contains exactly `["10.0.0.5:8000", "10.0.0.6:8000"]`; `"10.0.0.7:8000"` is removed from haproxy
 
-- [ ] `test: module passes mypy --strict`
+- [x] `test: module passes mypy --strict`
       Given: the file `src/vctl/lb/reconciler.py` as written
       When: `mypy --strict src/vctl/lb/reconciler.py` is executed in the project environment
       Then: the command exits with code 0 and produces no error output
 
-- [ ] `test: unit test suite runs without real haproxy and completes in under 5 seconds`
+- [x] `test: unit test suite runs without real haproxy and completes in under 5 seconds`
       Given: `tests/test_lb_reconciler.py` with all `RuntimeClient` calls mocked via `monkeypatch.setattr(reconciler, "lb_admin_client", ...)`
       When: `pytest tests/test_lb_reconciler.py` is run with no network and no haproxy process
       Then: all tests pass; total wall-clock time is under 5 seconds
 
-- [ ] `test: concurrent want_present with same ep produces exactly one state-file entry`
+- [x] `test: concurrent want_present with same ep produces exactly one state-file entry`
       Given: 4 worker processes spawned via `mp.get_context("spawn").Pool`, a running LB (VCTL_TEST_NO_SOCKET=1 so haproxy calls are no-ops), and an empty state file
       When: all 4 workers call `Reconciler(mgr).want_present("10.0.0.5:8000", "default")` concurrently
       Then: no worker raises an exception; the final state file contains exactly one entry `"10.0.0.5:8000"`; all returned `Outcome` objects have `ep == "10.0.0.5:8000"` and `action` in `{Action.ADDED, Action.NONE, Action.READIED}`
 
-- [ ] `test: existing lb_scaling functions are unchanged and all existing tests pass`
+- [x] `test: existing lb_scaling functions are unchanged and all existing tests pass`
       Given: the Phase 1 Reconciler module added to the codebase; `_do_add`, `_do_remove`, `_do_drain`, `_do_auto_add` in `lb_scaling.py` unchanged except for (a) replacing the `_name_for` definition with `from vctl.lb.routing import _name_for`, and (b) replacing the `_client` definition with `from vctl.lb.runtime import lb_admin_client as _client` (preserves the existing `lb_scaling._client` symbol so `monkeypatch.setattr(lb_scaling, "_client", ...)` patterns in current tests keep working without modification)
       When: `pytest tests/test_commands_lb_scaling.py tests/test_lb_state.py` is run
       Then: all tests pass with exit code 0; no test is modified or skipped
