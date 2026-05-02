@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import logging
 import os
 import sys
@@ -206,32 +205,32 @@ def _do_attach(port: int, mgr: LbManager, bs: BackendState) -> int:
 
 
 def _do_detach(mgr: LbManager, bs: BackendState) -> int:
+    """Drain → wait for idle → remove the local-host ep across all known pools.
+
+    The drain-wait timeout (LB_DETACH_WAIT, default 30s) and metrics polling
+    are application-level concerns and stay here, not in Reconciler.
+    """
     self_ip = detect_self_ip()
-    # Scan all known pools for an endpoint matching this host.
     pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
     if not pool_names:
-        # Fall back to pools in LB config.
         pool_names = [p.name for p in mgr.lb.pools]
 
-    cli = _client(mgr)
-    if cli is None:
-        # A4-family: unreachable socket → clear error, exit 4.
-        print(
-            f"LB admin socket unreachable at {mgr.sock_path} (and TCP"
-            f" {mgr.lb.host}:{mgr.lb.admin.bind_port}); cannot detach",
-            file=sys.stderr,
-        )
-        return 4
-
+    rec = Reconciler(mgr)
     for pname in pool_names:
         pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
         matching = [ep for ep in pbs.list() if ep.startswith(f"{self_ip}:")]
         if not matching:
             continue
         ep = matching[0]
-        backend_section = f"pool_{pname}"
-        with contextlib.suppress(Exception):
-            cli.set_state(backend_section, _name_for(ep), "drain")
+
+        # Step 1: set drain state — surfaces LbUnreachable as exit 4 immediately.
+        try:
+            rec.want_draining(ep, pname)
+        except ReconcilerError as exc:
+            print(f"detach drain {ep} failed: {exc}", file=sys.stderr)
+            return _exit_for(exc)
+
+        # Step 2: poll vllm metrics for idle (application-level drain wait).
         timeout = float(os.environ.get("LB_DETACH_WAIT", "30"))
         deadline = time.monotonic() + timeout
         port = int(ep.rsplit(":", 1)[1])
@@ -240,7 +239,15 @@ def _do_detach(mgr: LbManager, bs: BackendState) -> int:
             if probe.get("num_requests_running", 0.0) <= 0.0:
                 break
             time.sleep(1)
-        return _do_remove(ep, mgr, pbs, pool_name=pname)
+
+        # Step 3: remove via Reconciler (state file cleaned only after haproxy ack).
+        try:
+            outcome = rec.want_absent(ep, pname)
+        except ReconcilerError as exc:
+            print(f"detach remove {ep} failed: {exc}", file=sys.stderr)
+            return _exit_for(exc)
+        print(f"detach {ep} {outcome.action.name} (pool: {pname})", file=sys.stderr)
+        return 0
     return 0
 
 
