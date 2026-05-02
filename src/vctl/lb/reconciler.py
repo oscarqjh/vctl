@@ -67,6 +67,22 @@ class Reconciler:
         if pool not in available:
             raise PoolNotFound(requested=pool, available=available)
 
+    def _acquire(self) -> RuntimeClient:
+        """Open a fresh admin client or raise LbUnreachable.
+
+        Each haproxy admin command must use its own connection — the admin
+        socket closes after sending a response in the default (non-prompt)
+        mode, so reusing a single RuntimeClient across multiple commands
+        triggers BrokenPipeError on the second send.
+        """
+        client = lb_admin_client(self.mgr)
+        if client is None:
+            raise LbUnreachable(
+                sock=str(self.mgr.sock_path),
+                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
+            )
+        return client
+
     def _haproxy_servers(self, section: str, client: RuntimeClient) -> dict[str, BackendStatus]:
         """Return {endpoint: BackendStatus} for live haproxy server rows.
 
@@ -143,25 +159,18 @@ class Reconciler:
         self._validate_pool(pool)
         backend_section = f"pool_{pool}"
 
-        client = lb_admin_client(self.mgr)
-        if client is None:
-            raise LbUnreachable(
-                sock=str(self.mgr.sock_path),
-                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
-            )
-
-        haproxy_map = self._haproxy_servers(backend_section, client)
+        haproxy_map = self._haproxy_servers(backend_section, self._acquire())
         in_haproxy = ep in haproxy_map
         in_state = ep in BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).list()
 
         if not in_haproxy:
             try:
-                client.add_server(backend_section, _name_for(ep), ep)
+                self._acquire().add_server(backend_section, _name_for(ep), ep)
             except RuntimeError as exc:
                 raise BackendOpFailed(op="add_server", ep=ep, backend=backend_section) from exc
 
         try:
-            client.set_state(backend_section, _name_for(ep), "ready")
+            self._acquire().set_state(backend_section, _name_for(ep), "ready")
         except RuntimeError as exc:
             raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
 
@@ -193,14 +202,7 @@ class Reconciler:
         self._validate_pool(pool)
         backend_section = f"pool_{pool}"
 
-        client = lb_admin_client(self.mgr)
-        if client is None:
-            raise LbUnreachable(
-                sock=str(self.mgr.sock_path),
-                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
-            )
-
-        haproxy_map = self._haproxy_servers(backend_section, client)
+        haproxy_map = self._haproxy_servers(backend_section, self._acquire())
         in_haproxy = ep in haproxy_map
         in_state = ep in BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).list()
 
@@ -209,8 +211,8 @@ class Reconciler:
 
         if in_haproxy:
             try:
-                client.set_state(backend_section, _name_for(ep), "maint")
-                client.remove_server(backend_section, _name_for(ep))
+                self._acquire().set_state(backend_section, _name_for(ep), "maint")
+                self._acquire().remove_server(backend_section, _name_for(ep))
             except RuntimeError as exc:
                 raise BackendOpFailed(
                     op="set_state/remove_server", ep=ep, backend=backend_section
@@ -239,15 +241,8 @@ class Reconciler:
         self._validate_pool(pool)
         backend_section = f"pool_{pool}"
 
-        client = lb_admin_client(self.mgr)
-        if client is None:
-            raise LbUnreachable(
-                sock=str(self.mgr.sock_path),
-                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
-            )
-
         try:
-            client.set_state(backend_section, _name_for(ep), "drain")
+            self._acquire().set_state(backend_section, _name_for(ep), "drain")
         except RuntimeError as exc:
             raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
 
@@ -272,19 +267,15 @@ class Reconciler:
         self._validate_pool(pool)
         backend_section = f"pool_{pool}"
 
-        client = lb_admin_client(self.mgr)
-        if client is None:
-            raise LbUnreachable(
-                sock=str(self.mgr.sock_path),
-                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
-            )
+        # Fail-fast acquire so we surface LbUnreachable before any mutations.
+        self._acquire()
 
         outcomes: list[Outcome] = []
 
         for ep in sorted(target):
             outcomes.append(self.want_present(ep, pool))
 
-        haproxy_map = self._haproxy_servers(backend_section, client)
+        haproxy_map = self._haproxy_servers(backend_section, self._acquire())
         for ep in sorted(haproxy_map.keys()):
             if ep not in target:
                 outcomes.append(self.want_absent(ep, pool))

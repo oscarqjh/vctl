@@ -59,5 +59,5 @@ def pool_for_endpoint(lb: LbHaproxy, ep: str, *, timeout: float = 3.0) -> Pool:
 
 
 def _name_for(ep: str) -> str:
-    """Derive HAProxy server name from endpoint: replace dots/colons with underscores, prefix 'b_'."""
+    """Derive HAProxy server name from endpoint: 'b_' + dots/colons replaced with underscores."""
     return "b_" + ep.replace(".", "_").replace(":", "_")
