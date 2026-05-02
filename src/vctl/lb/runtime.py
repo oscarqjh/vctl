@@ -9,9 +9,13 @@ Encodes carry-overs from the bash prototype:
 from __future__ import annotations
 
 import contextlib
+import os
 import socket
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from vctl.lb.manager import LbManager
 
 LB_ADMIN_MAINT_MASK = 0x07
 LB_ADMIN_DRAIN_MASK = 0x38
@@ -169,3 +173,49 @@ class RuntimeClient:
                 k, _, v = line.partition(":")
                 out[k.strip()] = v.strip()
         return out
+
+
+class _NoOpClient:
+    """Drop-in stub for RuntimeClient used when VCTL_TEST_NO_SOCKET=1.
+
+    All haproxy admin operations succeed silently so tests that don't care
+    about haproxy interactions still pass. Tests that *do* want to assert
+    on haproxy calls should monkeypatch ``lb_admin_client`` directly to inject
+    a ``unittest.mock.MagicMock``.
+    """
+
+    def add_server(self, backend: str, name: str, ep: str) -> str:
+        return "new"
+
+    def remove_server(self, backend: str, name: str) -> None:
+        pass
+
+    def set_state(self, backend: str, name: str, state: str) -> None:
+        pass
+
+    def show_servers_state(self) -> list[BackendStatus]:
+        return []
+
+
+def lb_admin_client(mgr: LbManager) -> RuntimeClient | None:
+    """Return a RuntimeClient for the HAProxy admin socket, or None if unreachable.
+
+    Resolution order:
+      1. If VCTL_TEST_NO_SOCKET=1 → return _NoOpClient (no real socket attempt).
+      2. If the unix socket file exists → try RuntimeClient.for_unix().
+         On OSError (NFS mirage workaround) → fall through to TCP.
+      3. Try RuntimeClient.for_tcp(host, port).
+      4. Both failed → return None.
+    """
+    if os.environ.get("VCTL_TEST_NO_SOCKET") == "1":
+        return _NoOpClient()  # type: ignore[return-value]
+    sock = mgr.sock_path
+    if sock.exists():
+        try:
+            return RuntimeClient.for_unix(str(sock))
+        except OSError:
+            pass  # NFS mirage; fall through to TCP
+    try:
+        return RuntimeClient.for_tcp(mgr.lb.host, mgr.lb.admin.bind_port)
+    except OSError:
+        return None
