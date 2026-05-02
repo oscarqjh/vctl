@@ -11,7 +11,7 @@ import time
 from vctl.lb.errors import LbUnreachable, PoolNotFound, ReconcilerError
 from vctl.lb.manager import LbManager
 from vctl.lb.probe import probe_local_vllm, probe_vllm
-from vctl.lb.reconciler import Reconciler
+from vctl.lb.reconciler import Action, Reconciler
 from vctl.lb.routing import _name_for, pool_for_endpoint
 from vctl.lb.runtime import RuntimeClient, _NoOpClient
 from vctl.lb.runtime import lb_admin_client as _client
@@ -117,7 +117,7 @@ def _do_remove_cli(ep: str, mgr: LbManager, bs: BackendState) -> int:
         except ReconcilerError as exc:
             print(f"remove {ep} pool {pname!r} failed: {exc}", file=sys.stderr)
             return _exit_for(exc)
-        if outcome.action.name != "NONE":
+        if outcome.action is not Action.NONE:
             print(f"remove {ep} {outcome.action.name} (pool: {pname})", file=sys.stderr)
             any_removed = True
 

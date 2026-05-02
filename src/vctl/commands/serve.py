@@ -157,7 +157,14 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         _kill_tree(proc.pid)
         return 4  # C8: environment error (timeout) → exit 4
 
-    lb_scaling._do_add(ep, mgr, bs, pool_name=pool.name)
+    # Phase 2 v0.3.0: _do_add now returns 4 if LB unreachable (was: silent
+    # state-file write). Check the exit code — if attach fails, kill vllm and
+    # exit rather than serving traffic that never reaches haproxy.
+    attach_rc = lb_scaling._do_add(ep, mgr, bs, pool_name=pool.name)
+    if attach_rc != 0:
+        _LOG.error("lb attach failed (rc=%d) for %s; shutting down vllm", attach_rc, ep)
+        _kill_tree(proc.pid)
+        return attach_rc
     state["attached"] = True
 
     # F8: PPID watchdog — detect orphan parent (PPID==1 means the launching shell

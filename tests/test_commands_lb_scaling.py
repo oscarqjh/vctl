@@ -306,6 +306,27 @@ def test_do_add_haproxy_runtime_error_exits_1(
 # ---------------------------------------------------------------------------
 
 
+def test_do_add_exits_4_when_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-2: _do_add must return 4 and NOT write the state file when LB unreachable.
+
+    F11 regression guard — Phase 1 ordering invariant: state file is never written
+    before haproxy ack. If the admin socket is unreachable, no haproxy ack is
+    possible, so the state file must remain untouched.
+    """
+    import vctl.lb.reconciler as reconciler_mod
+
+    state_dir = tmp_path / "state"
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    rc = lb_scaling._do_add("10.0.0.5:8000", mgr, bs, pool_name="default")
+    assert rc == 4
+    assert "10.0.0.5:8000" not in bs.list()
+
+
 def test_do_remove_exits_4_when_lb_unreachable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -538,6 +559,54 @@ def test_do_remove_cli_exits_4_when_lb_unreachable_in_fallback(
 
     rc = lb_scaling._do_remove_cli("10.0.0.5:8000", mgr, bs)
     assert rc == 4
+
+
+# ---------------------------------------------------------------------------
+# AC-7 LbUnreachable variant: _do_auto_add per-pool LbUnreachable → exit 1
+# ---------------------------------------------------------------------------
+
+
+def test_do_auto_add_exits_1_when_pool_reconcile_raises_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-7: per-pool LbUnreachable surfaces as failed-pool in stderr; exit 1."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    state_dir = tmp_path / "state"
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+    bs.add("10.0.0.5:8000")
+
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    rc = lb_scaling._do_auto_add(mgr, bs)
+    assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# AC-?: _do_detach LbUnreachable path (drain phase) → exit 4
+# ---------------------------------------------------------------------------
+
+
+def test_do_detach_exits_4_when_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_do_detach must return 4 if LB is unreachable during the drain phase.
+    State file is untouched (Reconciler haproxy-first invariant)."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    state_dir = tmp_path / "state"
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+    pbs = BackendState(state_dir, "10.0.0.1", pool="default")
+    pbs.add("127.0.0.1:8000")
+
+    monkeypatch.setattr(lb_scaling, "detect_self_ip", lambda: "127.0.0.1")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    rc = lb_scaling._do_detach(mgr, bs)
+    assert rc == 4
+    assert "127.0.0.1:8000" in pbs.list()
 
 
 # ---------------------------------------------------------------------------
