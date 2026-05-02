@@ -37,6 +37,13 @@ CI matrix (`.github/workflows/ci.yml`) runs all four steps (`ruff check`, `ruff 
 
 Ruff config (`.ruff.toml`): `target-version = py310`, `line-length = 100`, lint rules `E,F,W,I,B,UP,SIM,N`, double-quote format. Mypy is `strict = True` over `src/vctl` (see `mypy.ini`).
 
+## Gotchas
+
+- **`pytest` / `mypy` / `ruff` are not on global PATH.** Use `.venv/bin/pytest`, `.venv/bin/mypy`, `.venv/bin/ruff` (or prefix with `uv run`). The shell on this box has a different binary called `gh` (a "Github browser opener", not the official GitHub CLI) — `gh pr create` etc. is not available; push the branch and open the GitHub URL manually.
+- **`tests/test_cli.py::test_help_under_200ms` is timing-flaky under suite load.** Passes standalone, can fail when full suite runs in parallel. Pre-existing; not a Reconciler regression.
+- **HAProxy admin socket closes after every response** in default (non-prompt) mode. Code that issues multiple admin commands MUST open a fresh `RuntimeClient` per command (see `Reconciler._acquire`). Reusing one client triggers `BrokenPipeError` on the second send. Existing `lb_scaling._do_add` masks this with `contextlib.suppress` on the trailing `set_state` call — Phase 2 will inherit the per-call client pattern.
+- **`lb_scaling.py` re-exports** `_client` (alias for `vctl.lb.runtime.lb_admin_client`) and `_NoOpClient` and `_name_for` via `__all__`. Required for mypy `--strict` to treat `from vctl.commands.lb_scaling import _client` (used in `commands/lb.py`) as an explicit re-export, AND for backward compatibility with `monkeypatch.setattr(lb_scaling, "_client", ...)` in existing tests. Do not remove `__all__` — mypy will fail.
+
 ## Architecture
 
 ### CLI dispatch — lazy imports for sub-200ms startup

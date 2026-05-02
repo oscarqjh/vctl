@@ -3,6 +3,30 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.3.0] - 2026-05-03
+
+### Changed (BREAKING)
+
+- **`lb add` / `lb remove` / `lb drain` now exit 4 against a stopped LB** (was: silent state-file write or exit 0). The Reconciler enforces the haproxy-ack-before-state-write invariant; if the admin socket is unreachable it raises `LbUnreachable` and propagates as exit 4. Operators that relied on offline pre-population of the state file via `lb add` must run `lb start` first, then `lb add`.
+- **`lb remove <ep>` for an ep absent from all pool state files now exits 4 against a stopped LB** (was: exit 1 with "not found"). The fallback loop iterates configured pools and probes haproxy via Reconciler; if the LB is unreachable, the first probe raises `LbUnreachable` and propagates as exit 4 instead of completing as not-found.
+- **`lb auto-add` now exits 1 when any pool's reconcile fails** (was: silent suppress of all haproxy admin errors, always exit 0). Stderr identifies the failing pool. Closes F12.
+- **`lb add` no longer writes the state file when haproxy refuses.** Closes F11. The state-first ordering bug in the legacy `_do_add` is fixed by routing through `Reconciler.want_present`, which reads pre-state, mutates haproxy first, and only writes the state file after a successful ack.
+- **Stderr success messages surface `Outcome.action.name`** instead of legacy `(new)` / `(already present)` strings. Examples: `add 10.0.0.5:8000 ADDED (pool: default)`, `add 10.0.0.5:8000 READIED (pool: default)`, `add 10.0.0.5:8000 ADOPTED (pool: default)`. Carries the four-case distinction that was previously invisible (drift adoption, idempotent re-heal).
+- **`lb add` no longer distinguishes `No such backend` (exit 3) from other haproxy admin errors (exit 1)** at the exit-code level. All `RuntimeError` from haproxy admin maps to `BackendOpFailed` → exit 1; the specific message remains in stderr. Operators inspecting exit codes for branching should match on stderr instead.
+
+### Fixed
+
+- **F11**: state-first ordering bug in `_do_add`. State file no longer holds entries that haproxy never acknowledged. Verified: no `bs.add(ep)` / `bs.remove(ep)` call precedes any haproxy admin call across all six migrated verbs.
+- **F12**: silent suppress in `_do_auto_add`. `contextlib.suppress(Exception)` removed from haproxy admin calls; per-pool failures are surfaced and accumulated.
+
+### Internal
+
+- Six scaling verbs migrated to delegate state mutations to the Reconciler module shipped in v0.2.x: `_do_add`, `_do_remove`, `_do_drain`, `_do_auto_add`, `_do_remove_cli`, `_do_detach`. Each function body is now a try/except wrapper around a Reconciler call; argparse + pool-resolution + stderr formatting unchanged. Function signatures preserved for caller compatibility.
+- New `_exit_for(exc: ReconcilerError) -> int` helper centralizes the ReconcilerError → exit code mapping (`LbUnreachable` → 4, `PoolNotFound` → 3, `BackendOpFailed` and others → 1).
+- `import contextlib` removed from `lb_scaling.py` — no longer needed after F12 fix.
+- `vctl serve`'s LB-attach step now checks `_do_add`'s return code; if attach fails (e.g. LB down at model-ready time), vllm is killed and `serve` exits non-zero rather than serving traffic that never reaches haproxy. Previously the rc was ignored — pre-Phase 2 this was masked by `_do_add` writing to the state file, but Phase 2 makes the failure visible and actionable.
+- 414 tests passing including 7 new exit-4/exit-1 tests for the migrated verbs (covering AC-2, AC-4, AC-6, AC-7 LbUnreachable + BackendOpFailed paths, and the AC-? `_do_detach` LbUnreachable path).
+
 ## [0.2.13] - 2026-05-02
 
 ### Removed

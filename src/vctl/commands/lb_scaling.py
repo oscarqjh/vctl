@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import logging
 import os
 import sys
 import time
 
+from vctl.lb.errors import LbUnreachable, PoolNotFound, ReconcilerError
 from vctl.lb.manager import LbManager
 from vctl.lb.probe import probe_local_vllm, probe_vllm
+from vctl.lb.reconciler import Action, Reconciler
 from vctl.lb.routing import _name_for, pool_for_endpoint
 from vctl.lb.runtime import RuntimeClient, _NoOpClient
 from vctl.lb.runtime import lb_admin_client as _client
@@ -27,6 +28,20 @@ _LOG = logging.getLogger(__name__)
 #   2. `monkeypatch.setattr(lb_scaling, "_client", ...)` in existing tests
 #      keeps working unchanged after the Phase 1 extraction.
 __all__ = ["_NoOpClient", "_client", "RuntimeClient", "_name_for"]
+
+
+def _exit_for(exc: ReconcilerError) -> int:
+    """Map a ReconcilerError subclass to a CLI exit code.
+
+    LbUnreachable  → 4  (environment error: LB socket down)
+    PoolNotFound   → 3  (user error: unknown pool name)
+    BackendOpFailed and any future ReconcilerError subclass → 1  (generic failure)
+    """
+    if isinstance(exc, LbUnreachable):
+        return 4
+    if isinstance(exc, PoolNotFound):
+        return 3
+    return 1
 
 
 def dispatch(
@@ -67,45 +82,48 @@ def _do_add_cli(ep: str, mgr: LbManager, bs: BackendState, requested_pool: str |
 
 
 def _do_remove_cli(ep: str, mgr: LbManager, bs: BackendState) -> int:
-    """User-invoked ``lb remove``. Scan all pools for the ep.
+    """User-invoked ``lb remove``. Scan state-file pools to find ep, then delegate
+    to Reconciler.want_absent. If absent from all state files, iterate configured
+    pools and call Reconciler.want_absent on each (idempotent — Action.NONE if not
+    present, ORPHANED_CLEANED if state-only, REMOVED if haproxy had it).
 
-    - If found in a pool state file → delegate to _do_remove (haproxy-first).
-    - If not found in any state file → attempt haproxy-side cleanup against all
-      configured pools (server may still linger there without a state-file entry).
-      Returns 0 if any haproxy removal succeeded, 1 if nothing was removed anywhere.
+    The fallback loop returns _exit_for(exc) on the first ReconcilerError so a
+    propagating LbUnreachable surfaces as exit 4 immediately. This differs from
+    _do_auto_add's accumulate-and-continue model because remove-cli is a single-ep
+    operation, not a bulk reconcile.
     """
     pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
     if not pool_names:
         pool_names = [p.name for p in mgr.lb.pools]
+
+    # First match: scan state files (cheap, no socket).
     for pname in pool_names:
         pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
         if ep in pbs.list():
-            return _do_remove(ep, mgr, pbs, pool_name=pname)
+            try:
+                outcome = Reconciler(mgr).want_absent(ep, pname)
+            except ReconcilerError as exc:
+                print(f"remove {ep} failed: {exc}", file=sys.stderr)
+                return _exit_for(exc)
+            print(f"remove {ep} {outcome.action.name} (pool: {pname})", file=sys.stderr)
+            return 0
 
-    # Not found in any pool state file — attempt haproxy-side cleanup.
-    cli = _client(mgr)
-    if cli is None:
-        print(
-            f"endpoint {ep} not found in any pool state file and LB admin socket unreachable",
-            file=sys.stderr,
-        )
-        return 1
-
+    # Not found in any state file — try each configured pool. Reconciler.want_absent
+    # returns Action.NONE if not present anywhere; we filter those out of the log.
     any_removed = False
     for pname in pool_names:
-        backend_section = f"pool_{pname}"
-        name = _name_for(ep)
         try:
-            cli.set_state(backend_section, name, "maint")
-            cli.remove_server(backend_section, name)
-            print(f"remove {ep} (removed from haproxy only, pool: {pname})", file=sys.stderr)
+            outcome = Reconciler(mgr).want_absent(ep, pname)
+        except ReconcilerError as exc:
+            print(f"remove {ep} pool {pname!r} failed: {exc}", file=sys.stderr)
+            return _exit_for(exc)
+        if outcome.action is not Action.NONE:
+            print(f"remove {ep} {outcome.action.name} (pool: {pname})", file=sys.stderr)
             any_removed = True
-        except Exception:
-            pass
 
     if any_removed:
         return 0
-    print(f"endpoint {ep} not found in any pool state file", file=sys.stderr)
+    print(f"endpoint {ep} not found in any pool state file or haproxy", file=sys.stderr)
     return 1
 
 
@@ -132,129 +150,45 @@ def _resolve_pool_name(mgr: LbManager, requested: str | None) -> str:
 
 
 def _do_add(ep: str, mgr: LbManager, bs: BackendState, pool_name: str | None = None) -> int:
+    # `bs` is unused — Reconciler owns BackendState. Kept in signature for caller compat.
+    del bs
     pool_name = _resolve_pool_name(mgr, pool_name)
-    backend_section = f"pool_{pool_name}"
-    state_result = bs.add(ep)
-    label = "(new)" if state_result == "new" else "(already present)"
-    cli = _client(mgr)
-    if cli is not None:
-        try:
-            cli.add_server(backend_section, _name_for(ep), ep)
-        except Exception as e:
-            msg = str(e)
-            if "already exists" in msg.lower() or "already present" in msg.lower():
-                # Idempotent re-add: haproxy already knows this server.
-                pass
-            elif "no such backend" in msg.lower():
-                print(
-                    f"haproxy refused add_server for {ep}: {e} (pool section {backend_section!r}"
-                    f" missing from haproxy config?)",
-                    file=sys.stderr,
-                )
-                # Roll back state add if it was a fresh insert.
-                if state_result == "new":
-                    bs.remove(ep)
-                return 3
-            else:
-                print(
-                    f"haproxy admin add_server failed for {ep}: {e}",
-                    file=sys.stderr,
-                )
-                # Roll back state add if it was a fresh insert.
-                if state_result == "new":
-                    bs.remove(ep)
-                return 1
-        # Force ready: clears any lingering drain/maint from a previous
-        # session that crashed mid-detach. Idempotent.
-        with contextlib.suppress(Exception):
-            cli.set_state(backend_section, _name_for(ep), "ready")
-    print(f"add {ep} {label} (pool: {pool_name})", file=sys.stderr)
+    try:
+        outcome = Reconciler(mgr).want_present(ep, pool_name)
+    except ReconcilerError as exc:
+        print(f"add {ep} failed: {exc}", file=sys.stderr)
+        return _exit_for(exc)
+    print(f"add {ep} {outcome.action.name} (pool: {pool_name})", file=sys.stderr)
     return 0
 
 
 def _do_remove(ep: str, mgr: LbManager, bs: BackendState, pool_name: str | None = None) -> int:
-    """Haproxy-first removal: set maint → del server → remove from state file.
+    """Haproxy-first removal via Reconciler.want_absent.
 
-    If the admin socket is unreachable the state file is NOT mutated (to avoid
-    split-brain).  If any haproxy step fails the state file is also NOT mutated
-    (server left in maint state on partial failure).
+    Reconciler enforces the haproxy-ack-before-state-write invariant: if any
+    haproxy admin op fails, the state file is left untouched and BackendOpFailed
+    propagates. If the LB is unreachable, LbUnreachable propagates and we exit 4.
     """
+    # `bs` is unused — Reconciler owns BackendState. Kept in signature for caller compat.
+    del bs
     pool_name = _resolve_pool_name(mgr, pool_name)
-    backend_section = f"pool_{pool_name}"
-    cli = _client(mgr)
-
-    if cli is None:
-        # A4-family: unreachable socket → clear error, exit 4, no state mutation.
-        print(
-            f"LB admin socket unreachable at {mgr.sock_path} (and TCP"
-            f" {mgr.lb.host}:{mgr.lb.admin.bind_port}); cannot remove {ep}",
-            file=sys.stderr,
-        )
-        return 4
-
-    name = _name_for(ep)
-
-    # Step 1: set server maint (HAProxy requires maint before del server).
     try:
-        cli.set_state(backend_section, name, "maint")
-    except Exception as e:
-        msg = str(e)
-        no_such = "no such server" in msg.lower()
-        already_maint = "already in maint" in msg.lower()
-        if no_such:
-            # Server is already absent from haproxy — remove from state file
-            # to reconcile, then return 0 (idempotent).
-            bs.remove(ep)
-            print(
-                f"remove {ep} (absent from haproxy, cleaned state) (pool: {pool_name})",
-                file=sys.stderr,
-            )
-            return 0
-        if not already_maint:
-            print(
-                f"haproxy set_state maint failed for {ep}: {e}",
-                file=sys.stderr,
-            )
-            return 1
-        # already_maint — continue to del server.
-
-    # Step 2: del server.
-    try:
-        cli.remove_server(backend_section, name)
-    except Exception as e:
-        msg = str(e)
-        if "no such server" in msg.lower():
-            # Already removed from haproxy — reconcile state file.
-            bs.remove(ep)
-            print(
-                f"remove {ep} (absent from haproxy, cleaned state) (pool: {pool_name})",
-                file=sys.stderr,
-            )
-            return 0
-        print(
-            f"haproxy remove_server failed for {ep} (left in maint): {e}",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Step 3: only update the state file after both haproxy ops succeed.
-    bs.remove(ep)
+        outcome = Reconciler(mgr).want_absent(ep, pool_name)
+    except ReconcilerError as exc:
+        print(f"remove {ep} failed: {exc}", file=sys.stderr)
+        return _exit_for(exc)
+    print(f"remove {ep} {outcome.action.name} (pool: {pool_name})", file=sys.stderr)
     return 0
 
 
 def _do_drain(ep: str, mgr: LbManager, pool_name: str | None = None) -> int:
     pool_name = _resolve_pool_name(mgr, pool_name)
-    backend_section = f"pool_{pool_name}"
-    cli = _client(mgr)
-    if cli is None:
-        # A4: unreachable socket → clear error, exit 4.
-        print(
-            f"LB admin socket unreachable at {mgr.sock_path} (and TCP"
-            f" {mgr.lb.host}:{mgr.lb.admin.bind_port}); cannot drain {ep}",
-            file=sys.stderr,
-        )
-        return 4
-    cli.set_state(backend_section, _name_for(ep), "drain")
+    try:
+        outcome = Reconciler(mgr).want_draining(ep, pool_name)
+    except ReconcilerError as exc:
+        print(f"drain {ep} failed: {exc}", file=sys.stderr)
+        return _exit_for(exc)
+    print(f"drain {ep} {outcome.action.name} (pool: {pool_name})", file=sys.stderr)
     return 0
 
 
@@ -271,32 +205,32 @@ def _do_attach(port: int, mgr: LbManager, bs: BackendState) -> int:
 
 
 def _do_detach(mgr: LbManager, bs: BackendState) -> int:
+    """Drain → wait for idle → remove the local-host ep across all known pools.
+
+    The drain-wait timeout (LB_DETACH_WAIT, default 30s) and metrics polling
+    are application-level concerns and stay here, not in Reconciler.
+    """
     self_ip = detect_self_ip()
-    # Scan all known pools for an endpoint matching this host.
     pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
     if not pool_names:
-        # Fall back to pools in LB config.
         pool_names = [p.name for p in mgr.lb.pools]
 
-    cli = _client(mgr)
-    if cli is None:
-        # A4-family: unreachable socket → clear error, exit 4.
-        print(
-            f"LB admin socket unreachable at {mgr.sock_path} (and TCP"
-            f" {mgr.lb.host}:{mgr.lb.admin.bind_port}); cannot detach",
-            file=sys.stderr,
-        )
-        return 4
-
+    rec = Reconciler(mgr)
     for pname in pool_names:
         pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
         matching = [ep for ep in pbs.list() if ep.startswith(f"{self_ip}:")]
         if not matching:
             continue
         ep = matching[0]
-        backend_section = f"pool_{pname}"
-        with contextlib.suppress(Exception):
-            cli.set_state(backend_section, _name_for(ep), "drain")
+
+        # Step 1: set drain state — surfaces LbUnreachable as exit 4 immediately.
+        try:
+            rec.want_draining(ep, pname)
+        except ReconcilerError as exc:
+            print(f"detach drain {ep} failed: {exc}", file=sys.stderr)
+            return _exit_for(exc)
+
+        # Step 2: poll vllm metrics for idle (application-level drain wait).
         timeout = float(os.environ.get("LB_DETACH_WAIT", "30"))
         deadline = time.monotonic() + timeout
         port = int(ep.rsplit(":", 1)[1])
@@ -305,28 +239,43 @@ def _do_detach(mgr: LbManager, bs: BackendState) -> int:
             if probe.get("num_requests_running", 0.0) <= 0.0:
                 break
             time.sleep(1)
-        return _do_remove(ep, mgr, pbs, pool_name=pname)
+
+        # Step 3: remove via Reconciler (state file cleaned only after haproxy ack).
+        try:
+            outcome = rec.want_absent(ep, pname)
+        except ReconcilerError as exc:
+            print(f"detach remove {ep} failed: {exc}", file=sys.stderr)
+            return _exit_for(exc)
+        print(f"detach {ep} {outcome.action.name} (pool: {pname})", file=sys.stderr)
+        return 0
     return 0
 
 
 def _do_auto_add(mgr: LbManager, bs: BackendState) -> int:
-    cli = _client(mgr)
-    # Scan all known pools.
+    """Reconcile every pool's state file against haproxy. Closes F12.
+
+    Per-pool failures (LbUnreachable, BackendOpFailed) no longer suppressed;
+    each is surfaced on stderr and accumulated. Exits 1 if any pool failed,
+    so operators can detect drift instead of silently relying on stale state.
+    """
     pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
     if not pool_names:
         pool_names = [p.name for p in mgr.lb.pools]
+    rec = Reconciler(mgr)
+    failed: list[str] = []
     for pname in pool_names:
-        pbs = BackendState(bs.state_dir, bs.lb_host, pool=pname)
-        backend_section = f"pool_{pname}"
-        for ep in pbs.list():
-            if cli is not None:
-                with contextlib.suppress(Exception):
-                    cli.add_server(backend_section, _name_for(ep), ep)
-                # A7: force-set state ready after add so backends don't linger
-                # in maint after a recovery restart.
-                with contextlib.suppress(Exception):
-                    cli.set_state(backend_section, _name_for(ep), "ready")
-    return 0
+        try:
+            outcomes = rec.reconcile_from_state(pname)
+        except ReconcilerError as exc:
+            print(f"auto-add pool {pname!r} failed: {exc}", file=sys.stderr)
+            failed.append(pname)
+            continue
+        for outcome in outcomes:
+            print(
+                f"auto-add {outcome.ep} {outcome.action.name} (pool: {pname})",
+                file=sys.stderr,
+            )
+    return 1 if failed else 0
 
 
 def _do_health(mgr: LbManager, bs: BackendState) -> int:

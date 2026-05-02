@@ -12,6 +12,7 @@ import pytest
 
 from vctl.commands import lb_scaling
 from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+from vctl.lb.errors import BackendOpFailed, LbUnreachable, PoolNotFound, ReconcilerError
 from vctl.lb.manager import LbManager
 from vctl.lb.state import BackendState
 
@@ -33,7 +34,12 @@ def _make_repo(tmp_path: Path) -> Path:
 
 
 def test_lb_add_idempotent_first_then_dup(tmp_path: Path) -> None:
-    """AT-9: first call says (new), second says (already present)."""
+    """First call surfaces ADDED, second call surfaces READIED (idempotent re-add).
+
+    Under VCTL_TEST_NO_SOCKET=1, _NoOpClient returns [] from show_servers_state, so
+    Reconciler always sees in_haproxy=False. First call: in_state=False → ADDED.
+    Second call: in_state=True (state-only) → READIED.
+    """
     repo = _make_repo(tmp_path)
     env = {
         **os.environ,
@@ -43,11 +49,11 @@ def test_lb_add_idempotent_first_then_dup(tmp_path: Path) -> None:
     }
 
     p1 = _vctl("lb", "add", "10.0.0.5:8000", cwd=repo, env=env)
-    assert p1.returncode == 0
-    assert "(new)" in p1.stderr
+    assert p1.returncode == 0, p1.stderr
+    assert "ADDED" in p1.stderr
     p2 = _vctl("lb", "add", "10.0.0.5:8000", cwd=repo, env=env)
-    assert p2.returncode == 0
-    assert "(already present)" in p2.stderr
+    assert p2.returncode == 0, p2.stderr
+    assert "READIED" in p2.stderr
 
 
 def test_lb_remove_after_add(tmp_path: Path) -> None:
@@ -126,7 +132,7 @@ def test_lb_add_with_explicit_pool_flag(tmp_path: Path) -> None:
     }
     p = _vctl("lb", "add", "10.0.0.5:8000", "--pool", "a", cwd=repo, env=env)
     assert p.returncode == 0, p.stderr
-    assert "(new)" in p.stderr
+    assert "ADDED" in p.stderr
     assert (state / "10.0.0.1" / "a_backends.txt").read_text().strip() == "10.0.0.5:8000"
     assert (
         not (state / "10.0.0.1" / "b_backends.txt").exists()
@@ -198,9 +204,11 @@ def _make_mgr(tmp_path: Path, lb: LbHaproxy | None = None) -> LbManager:
 def test_do_drain_exits_4_when_lb_unreachable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A4: _do_drain must return 4 (not 0) when _client returns None."""
+    """A4: _do_drain must return 4 when LB admin socket unreachable."""
+    import vctl.lb.reconciler as reconciler_mod
+
     mgr = _make_mgr(tmp_path)
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: None)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
     rc = lb_scaling._do_drain("10.0.0.5:8000", mgr, pool_name="default")
     assert rc == 4
 
@@ -208,10 +216,12 @@ def test_do_drain_exits_4_when_lb_unreachable(
 def test_do_drain_succeeds_when_cli_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A4 inverse: _do_drain returns 0 when client is present."""
+    """A4 inverse: _do_drain returns 0 when LB admin socket reachable."""
+    import vctl.lb.reconciler as reconciler_mod
+
     mgr = _make_mgr(tmp_path)
     cli = MagicMock()
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
     rc = lb_scaling._do_drain("10.0.0.5:8000", mgr, pool_name="default")
     assert rc == 0
     cli.set_state.assert_called_once_with("pool_default", "b_10_0_0_5_8000", "drain")
@@ -222,55 +232,72 @@ def test_do_drain_succeeds_when_cli_available(
 # ---------------------------------------------------------------------------
 
 
-def test_do_add_propagates_haproxy_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A5: _do_add must return non-zero when haproxy add_server fails with a
-    non-idempotent error (not 'already exists')."""
+def test_do_add_propagates_haproxy_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A5: _do_add must return non-zero when haproxy add_server raises RuntimeError;
+    state file is NOT written (haproxy-first invariant)."""
+    import vctl.lb.reconciler as reconciler_mod
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
 
     cli = MagicMock()
-    cli.add_server.side_effect = Exception("connection refused")
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    cli.show_servers_state.return_value = []  # haproxy empty
+    cli.add_server.side_effect = RuntimeError("connection refused")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_add("10.0.0.5:8000", mgr, bs, pool_name="default")
-    assert rc != 0
-    # State must be rolled back (not left in state file)
+    assert rc == 1  # BackendOpFailed → exit 1
+    # State file untouched (haproxy-first invariant; closes F11)
     assert "10.0.0.5:8000" not in bs.list()
 
 
-def test_do_add_idempotent_already_exists_is_ok(
+def test_do_add_idempotent_already_present_is_readied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A5: haproxy saying 'already exists' must stay exit 0 (idempotent re-add)."""
+    """A5 successor: when ep is already in haproxy, _do_add returns 0 with READIED/ADOPTED
+    (Reconciler reads pre-state, never calls add_server, just re-readies)."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.runtime import BackendStatus
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
 
     cli = MagicMock()
-    cli.add_server.side_effect = Exception("Server pool_default/b_... already exists")
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    cli.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2)
+    ]
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_add("10.0.0.5:8000", mgr, bs, pool_name="default")
     assert rc == 0
+    cli.add_server.assert_not_called()
 
 
-def test_do_add_no_such_backend_exits_3(
+def test_do_add_haproxy_runtime_error_exits_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A5: 'No such backend' error → exit 3 (user error)."""
+    """Reconciler normalises all non-idempotency haproxy errors via BackendOpFailed → exit 1.
+
+    Phase 2 BREAKING: legacy _do_add distinguished 'No such backend' (exit 3) from
+    other errors (exit 1). Reconciler does not parse error strings — all RuntimeError
+    paths become BackendOpFailed → exit 1. Operators inspect stderr for the haproxy
+    error message instead of the exit code.
+    """
+    import vctl.lb.reconciler as reconciler_mod
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
 
     cli = MagicMock()
-    cli.add_server.side_effect = Exception("No such backend: pool_default")
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    cli.show_servers_state.return_value = []
+    cli.add_server.side_effect = RuntimeError("No such backend: pool_default")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_add("10.0.0.5:8000", mgr, bs, pool_name="default")
-    assert rc == 3
+    assert rc == 1
     assert "10.0.0.5:8000" not in bs.list()
 
 
@@ -279,20 +306,42 @@ def test_do_add_no_such_backend_exits_3(
 # ---------------------------------------------------------------------------
 
 
+def test_do_add_exits_4_when_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-2: _do_add must return 4 and NOT write the state file when LB unreachable.
+
+    F11 regression guard — Phase 1 ordering invariant: state file is never written
+    before haproxy ack. If the admin socket is unreachable, no haproxy ack is
+    possible, so the state file must remain untouched.
+    """
+    import vctl.lb.reconciler as reconciler_mod
+
+    state_dir = tmp_path / "state"
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    rc = lb_scaling._do_add("10.0.0.5:8000", mgr, bs, pool_name="default")
+    assert rc == 4
+    assert "10.0.0.5:8000" not in bs.list()
+
+
 def test_do_remove_exits_4_when_lb_unreachable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A6: _do_remove must return 4 and NOT mutate state when LB is unreachable."""
+    import vctl.lb.reconciler as reconciler_mod
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
     bs.add("10.0.0.5:8000")
 
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: None)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
 
     rc = lb_scaling._do_remove("10.0.0.5:8000", mgr, bs, pool_name="default")
     assert rc == 4
-    # State file unchanged
     assert "10.0.0.5:8000" in bs.list()
 
 
@@ -300,18 +349,23 @@ def test_do_remove_state_unchanged_when_set_maint_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A6: state file must NOT be mutated if set_state maint fails."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.runtime import BackendStatus
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
     bs.add("10.0.0.5:8000")
 
     cli = MagicMock()
-    cli.set_state.side_effect = Exception("haproxy reloading")
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    cli.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2)
+    ]
+    cli.set_state.side_effect = RuntimeError("haproxy reloading")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_remove("10.0.0.5:8000", mgr, bs, pool_name="default")
-    assert rc != 0
-    # State file unchanged — server NOT removed
+    assert rc == 1  # BackendOpFailed
     assert "10.0.0.5:8000" in bs.list()
 
 
@@ -319,41 +373,49 @@ def test_do_remove_state_unchanged_when_del_server_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A6: state file must NOT be mutated if remove_server fails after maint."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.runtime import BackendStatus
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
     bs.add("10.0.0.5:8000")
 
     cli = MagicMock()
+    cli.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2)
+    ]
     cli.set_state.return_value = None  # maint succeeds
-    cli.remove_server.side_effect = Exception("Operation not permitted")
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    cli.remove_server.side_effect = RuntimeError("Operation not permitted")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_remove("10.0.0.5:8000", mgr, bs, pool_name="default")
-    assert rc != 0
-    # State file unchanged — server left in maint state in haproxy
+    assert rc == 1  # BackendOpFailed
     assert "10.0.0.5:8000" in bs.list()
 
 
-def test_do_remove_happy_path_ordering(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A6: on success, calls set_state maint then remove_server then bs.remove."""
+def test_do_remove_happy_path_ordering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A6: on success, set_state maint precedes remove_server precedes state-file cleanup."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.runtime import BackendStatus
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
     bs.add("10.0.0.5:8000")
 
     cli = MagicMock()
+    cli.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2)
+    ]
     call_order: list[str] = []
     cli.set_state.side_effect = lambda *a, **kw: call_order.append("set_state")
     cli.remove_server.side_effect = lambda *a, **kw: call_order.append("remove_server")
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_remove("10.0.0.5:8000", mgr, bs, pool_name="default")
     assert rc == 0
     assert call_order == ["set_state", "remove_server"]
-    # State file cleaned up after haproxy ops
     assert "10.0.0.5:8000" not in bs.list()
 
 
@@ -362,46 +424,75 @@ def test_do_remove_happy_path_ordering(
 # ---------------------------------------------------------------------------
 
 
-def test_do_auto_add_calls_force_ready(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A7: _do_auto_add must call set_state ready after add_server."""
+def test_do_auto_add_calls_force_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A7: _do_auto_add via Reconciler.reconcile_from_state must call set_state ready."""
+    import vctl.lb.reconciler as reconciler_mod
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
     bs.add("10.0.0.5:8000")
 
     cli = MagicMock()
+    cli.show_servers_state.return_value = []  # haproxy empty → triggers add_server + set_state
     set_state_calls: list[tuple[object, ...]] = []
     cli.set_state.side_effect = lambda *a: set_state_calls.append(a)
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_auto_add(mgr, bs)
     assert rc == 0
-    # Must have called set_state with "ready"
     ready_calls = [c for c in set_state_calls if "ready" in c]
     assert ready_calls, f"set_state 'ready' not called; calls: {set_state_calls}"
 
 
-def test_do_auto_add_force_ready_called_even_when_add_raises(
+def test_do_auto_add_idempotent_when_haproxy_already_has_ep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A7: force-ready must be attempted even when add_server raises."""
+    """Reconciler-style: when ep already in haproxy, add_server is not called;
+    set_state ready still runs to heal lingering drain/maint (READIED outcome)."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.runtime import BackendStatus
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
     bs.add("10.0.0.5:8000")
 
     cli = MagicMock()
-    cli.add_server.side_effect = Exception("already exists")
+    cli.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2)
+    ]
     set_state_calls: list[tuple[object, ...]] = []
     cli.set_state.side_effect = lambda *a: set_state_calls.append(a)
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_auto_add(mgr, bs)
     assert rc == 0
+    cli.add_server.assert_not_called()
     ready_calls = [c for c in set_state_calls if "ready" in c]
-    assert ready_calls, "force-ready must be attempted after add_server failure"
+    assert ready_calls, "set_state 'ready' must still run for idempotent re-heal"
+
+
+def test_do_auto_add_exits_1_on_per_pool_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F12 fix: _do_auto_add no longer suppresses haproxy errors. If reconcile_from_state
+    raises ReconcilerError for any pool, that pool is logged as failed and the function
+    returns 1 (was: silent suppress, always 0)."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    state_dir = tmp_path / "state"
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+    bs.add("10.0.0.5:8000")
+
+    cli = MagicMock()
+    cli.show_servers_state.return_value = []
+    cli.add_server.side_effect = RuntimeError("haproxy refused")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
+
+    rc = lb_scaling._do_auto_add(mgr, bs)
+    assert rc == 1
 
 
 # ---------------------------------------------------------------------------
@@ -409,56 +500,138 @@ def test_do_auto_add_force_ready_called_even_when_add_raises(
 # ---------------------------------------------------------------------------
 
 
-def test_do_remove_cli_returns_1_when_not_found_and_haproxy_refuses(
+def test_do_remove_cli_returns_1_when_not_found_anywhere(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A8: remove_cli returns 1 when endpoint not in any state file and haproxy
-    also reports 'no such server'."""
+    """A8: remove_cli returns 1 when ep not in any state file and not in haproxy.
+    Reconciler.want_absent returns Action.NONE on each pool; nothing logged; exit 1."""
+    import vctl.lb.reconciler as reconciler_mod
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
-    # Do NOT add the endpoint — state file is empty
 
     cli = MagicMock()
-    cli.set_state.side_effect = Exception("No such server")
-    cli.remove_server.side_effect = Exception("No such server")
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    cli.show_servers_state.return_value = []  # haproxy empty
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_remove_cli("10.0.0.5:8000", mgr, bs)
     assert rc == 1
 
 
-def test_do_remove_cli_returns_0_when_haproxy_cleanup_succeeds(
+def test_do_remove_cli_returns_0_when_haproxy_orphan_cleanup_succeeds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A8: remove_cli returns 0 when ep not in state file but haproxy removal
-    succeeds (stale entry cleanup)."""
+    """A8: remove_cli returns 0 when ep not in state file but haproxy still has it.
+    Reconciler.want_absent returns Action.REMOVED for that pool (orphan cleanup)."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.runtime import BackendStatus
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
-    # Pre-create the state file (empty) so list_pools finds "default"
-    bs.add("10.0.0.99:9999")  # different ep so our target is absent
-    bs.remove("10.0.0.99:9999")
 
     cli = MagicMock()
+    cli.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2)
+    ]
     cli.set_state.return_value = None
     cli.remove_server.return_value = None
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
 
     rc = lb_scaling._do_remove_cli("10.0.0.5:8000", mgr, bs)
     assert rc == 0
 
 
-def test_do_remove_cli_returns_1_no_socket_and_not_found(
+def test_do_remove_cli_exits_4_when_lb_unreachable_in_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A8: remove_cli returns 1 when endpoint not found in state AND socket is down."""
+    """v0.3.0 BREAKING: when ep not found in state AND LB is down, fallback loop's
+    Reconciler.want_absent raises LbUnreachable → _exit_for → 4 (was: 1, not-found).
+    """
+    import vctl.lb.reconciler as reconciler_mod
+
     state_dir = tmp_path / "state"
     mgr = _make_mgr(tmp_path)
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
-    # No endpoint registered
 
-    monkeypatch.setattr(lb_scaling, "_client", lambda m: None)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
 
     rc = lb_scaling._do_remove_cli("10.0.0.5:8000", mgr, bs)
+    assert rc == 4
+
+
+# ---------------------------------------------------------------------------
+# AC-7 LbUnreachable variant: _do_auto_add per-pool LbUnreachable → exit 1
+# ---------------------------------------------------------------------------
+
+
+def test_do_auto_add_exits_1_when_pool_reconcile_raises_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-7: per-pool LbUnreachable surfaces as failed-pool in stderr; exit 1."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    state_dir = tmp_path / "state"
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+    bs.add("10.0.0.5:8000")
+
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    rc = lb_scaling._do_auto_add(mgr, bs)
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# AC-?: _do_detach LbUnreachable path (drain phase) → exit 4
+# ---------------------------------------------------------------------------
+
+
+def test_do_detach_exits_4_when_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_do_detach must return 4 if LB is unreachable during the drain phase.
+    State file is untouched (Reconciler haproxy-first invariant)."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    state_dir = tmp_path / "state"
+    mgr = _make_mgr(tmp_path)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+    pbs = BackendState(state_dir, "10.0.0.1", pool="default")
+    pbs.add("127.0.0.1:8000")
+
+    monkeypatch.setattr(lb_scaling, "detect_self_ip", lambda: "127.0.0.1")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    rc = lb_scaling._do_detach(mgr, bs)
+    assert rc == 4
+    assert "127.0.0.1:8000" in pbs.list()
+
+
+# ---------------------------------------------------------------------------
+# Task 1: _exit_for helper — exit-code mapping
+# ---------------------------------------------------------------------------
+
+
+def test_exit_for_lb_unreachable_returns_4() -> None:
+    exc = LbUnreachable(sock="/run/haproxy.sock", tcp="10.0.0.1:9001")
+    assert lb_scaling._exit_for(exc) == 4
+
+
+def test_exit_for_pool_not_found_returns_3() -> None:
+    exc = PoolNotFound(requested="nonexistent", available=["default"])
+    assert lb_scaling._exit_for(exc) == 3
+
+
+def test_exit_for_backend_op_failed_returns_1() -> None:
+    exc = BackendOpFailed(op="add_server", ep="10.0.0.5:8000", backend="pool_default")
+    assert lb_scaling._exit_for(exc) == 1
+
+
+def test_exit_for_arbitrary_reconciler_error_subclass_returns_1() -> None:
+    class _UnknownError(ReconcilerError):
+        pass
+
+    exc = _UnknownError("unknown haproxy failure")
+    assert lb_scaling._exit_for(exc) == 1
