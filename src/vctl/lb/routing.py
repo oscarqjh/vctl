@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import re
 import sys
 
 import httpx
 
 from vctl.config.models import LbHaproxy, Pool
+
+# IPv4:port only. Tighter than the previous "any string" contract — rejects
+# newlines, spaces, slashes, and other characters that could inject into the
+# HAProxy admin socket protocol when interpolated into commands like
+# `add server <backend>/<name> <ep> check`.
+_EP_RE = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}")
 
 
 def pool_for_model(lb: LbHaproxy, served_model: str) -> Pool:
@@ -59,5 +66,14 @@ def pool_for_endpoint(lb: LbHaproxy, ep: str, *, timeout: float = 3.0) -> Pool:
 
 
 def _name_for(ep: str) -> str:
-    """Derive HAProxy server name from endpoint: 'b_' + dots/colons replaced with underscores."""
+    """Derive HAProxy server name from endpoint: 'b_' + dots/colons replaced with underscores.
+
+    Validates that ep is a well-formed `ip:port` string before deriving the name,
+    rejecting characters that could inject into the HAProxy admin protocol
+    (whitespace, newline, slash, etc.). Raises ValueError on invalid input.
+    """
+    if not _EP_RE.fullmatch(ep):
+        raise ValueError(
+            f"invalid endpoint {ep!r}; expected IPv4:port (e.g. '10.0.0.5:8000')"
+        )
     return "b_" + ep.replace(".", "_").replace(":", "_")

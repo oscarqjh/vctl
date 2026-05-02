@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.1] - 2026-05-03
+
+### Fixed
+
+- **`_name_for` now validates endpoint format** before deriving the haproxy server name. Rejects anything that doesn't match `\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}` with a `ValueError`. Closes the haproxy admin-socket command-injection vector that surfaced in the Phase 1 code review (a malformed ep with embedded newline could inject a second admin command via the `add server <backend>/<name> <ep> check` interpolation). Practical risk was low (state file is admin-only) but the one-line fullmatch is cheap insurance.
+- **`Reconciler._haproxy_servers` now filters by backend section** instead of returning all rows. `BackendStatus` gains a `backend: str` field populated from the haproxy `show servers state` response (the row's `parts[1]`). Rows with an empty `backend` (legacy haproxy versions or the `_NoOpClient` test stub) pass through unfiltered for back-compat. Resolves the documented per-pool filtering no-op from Phase 1.
+
+### Internal
+
+- `tests/test_lb_routing.py`: 10 new parametrized cases covering `_name_for` rejection of malformed / injection-shaped inputs.
+- `tests/test_lb_reconciler.py`: 2 new tests for the `_haproxy_servers` section filter (filters when backend column populated; passes through when backend column empty).
+- 411 tests passing (was 399 in v0.4.0; +12 new).
+
 ## [0.4.0] - 2026-05-03
 
 ### Removed (BREAKING)

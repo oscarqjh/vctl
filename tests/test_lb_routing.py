@@ -118,3 +118,28 @@ def test_name_for_importable_from_routing() -> None:
     from vctl.lb.routing import _name_for as nf
 
     assert nf("192.168.1.10:9000") == "b_192_168_1_10_9000"
+
+
+@pytest.mark.parametrize(
+    "bad_ep",
+    [
+        "",  # empty
+        "10.0.0.5",  # no port
+        "10.0.0.5:",  # empty port
+        ":8000",  # no host
+        "10.0.0.5:8000\nadd server pool/x 1.1.1.1:1 check",  # admin-socket injection
+        "10.0.0.5:8000 ; rm -rf /",  # shell-style injection
+        "10.0.0.5:8000/foo",  # slash injection (haproxy backend/name separator)
+        "host.example.com:8000",  # hostname not allowed (IPv4 only)
+        "10.0.0.5:8000:9000",  # extra colon
+        "10.0.0.5:8000.5",  # non-integer port
+    ],
+)
+def test_name_for_rejects_malformed_endpoint(bad_ep: str) -> None:
+    """v0.4.1: _name_for raises ValueError on anything but well-formed IPv4:port.
+
+    Hardening against haproxy admin-socket command injection if a malicious
+    or malformed ep slips through (e.g. via state-file manipulation).
+    """
+    with pytest.raises(ValueError, match="invalid endpoint"):
+        _name_for(bad_ep)
