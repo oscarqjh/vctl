@@ -205,3 +205,178 @@ def test_diff_all_returns_one_drift_per_pool(
     pool_names = {d.pool for d in drifts}
     assert pool_names == {"default", "gpu"}
     assert all(d.lb_reachable is False for d in drifts)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: want_present(ep, pool) — full 4-case action mapping
+# ---------------------------------------------------------------------------
+
+
+def test_want_present_registers_ep_in_haproxy_and_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance test: want_present ADDED path — registers in both haproxy and state file."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = []  # haproxy empty
+    mock_client.add_server.return_value = "new"
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcome = r.want_present("10.0.0.5:8000", "default")
+
+    mock_client.add_server.assert_called_once_with(
+        "pool_default", "b_10_0_0_5_8000", "10.0.0.5:8000"
+    )
+    mock_client.set_state.assert_called_once_with("pool_default", "b_10_0_0_5_8000", "ready")
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert "10.0.0.5:8000" in bs.list()
+    assert outcome.action == Action.ADDED
+    assert outcome.ep == "10.0.0.5:8000"
+    assert outcome.pool == "default"
+
+
+def test_want_present_raises_lb_unreachable_when_socket_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance test: want_present raises LbUnreachable and leaves state untouched."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.errors import LbUnreachable
+
+    mgr = _make_mgr(tmp_path)
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: None)
+
+    r = Reconciler(mgr)
+    with pytest.raises(LbUnreachable):
+        r.want_present("10.0.0.5:8000", "default")
+
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert bs.list() == []
+
+
+def test_want_present_adopts_orphaned_haproxy_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """in_haproxy=True, in_state=False → Action.ADOPTED; add_server skipped; state written."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2),
+    ]
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcome = r.want_present("10.0.0.5:8000", "default")
+
+    mock_client.add_server.assert_not_called()
+    mock_client.set_state.assert_called_once_with("pool_default", "b_10_0_0_5_8000", "ready")
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert "10.0.0.5:8000" in bs.list()
+    assert outcome.action == Action.ADOPTED
+
+
+def test_want_present_re_readies_when_in_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """in_haproxy=True, in_state=True → Action.READIED; add_server skipped; set_state called."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    BackendState(mgr.state_dir, mgr.lb.host, pool="default").add("10.0.0.5:8000")
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = [
+        BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2),
+    ]
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcome = r.want_present("10.0.0.5:8000", "default")
+
+    mock_client.add_server.assert_not_called()
+    mock_client.set_state.assert_called_once_with("pool_default", "b_10_0_0_5_8000", "ready")
+    assert outcome.action == Action.READIED
+    assert BackendState(mgr.state_dir, mgr.lb.host, pool="default").list() == ["10.0.0.5:8000"]
+
+
+def test_want_present_re_registers_when_state_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """in_haproxy=False, in_state=True → Action.READIED; add_server called; set_state called."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    BackendState(mgr.state_dir, mgr.lb.host, pool="default").add("10.0.0.5:8000")
+
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = []
+    mock_client.add_server.return_value = "new"
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    outcome = r.want_present("10.0.0.5:8000", "default")
+
+    mock_client.add_server.assert_called_once_with(
+        "pool_default", "b_10_0_0_5_8000", "10.0.0.5:8000"
+    )
+    mock_client.set_state.assert_called_once_with("pool_default", "b_10_0_0_5_8000", "ready")
+    assert outcome.action == Action.READIED
+    assert BackendState(mgr.state_dir, mgr.lb.host, pool="default").list() == ["10.0.0.5:8000"]
+
+
+def test_want_present_raises_backend_op_failed_and_leaves_state_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If add_server raises RuntimeError, BackendOpFailed is raised and state file is unchanged."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.errors import BackendOpFailed
+
+    mgr = _make_mgr(tmp_path)
+    mock_client = MagicMock()
+    mock_client.show_servers_state.return_value = []
+    mock_client.add_server.side_effect = RuntimeError("haproxy add_server failed: bad backend")
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: mock_client)
+
+    r = Reconciler(mgr)
+    with pytest.raises(BackendOpFailed):
+        r.want_present("10.0.0.5:8000", "default")
+
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert bs.list() == []
+
+
+def test_want_present_idempotent_second_call_returns_readied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance test: second call to want_present returns READIED and state has one entry."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    mgr = _make_mgr(tmp_path)
+    call_count = 0
+
+    def fake_client(m: LbManager) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        mc = MagicMock()
+        if call_count == 1:
+            mc.show_servers_state.return_value = []
+            mc.add_server.return_value = "new"
+        else:
+            mc.show_servers_state.return_value = [
+                BackendStatus(name="b_10_0_0_5_8000", endpoint="10.0.0.5:8000", op_state=2),
+            ]
+        return mc
+
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", fake_client)
+
+    r = Reconciler(mgr)
+    r.want_present("10.0.0.5:8000", "default")  # first → ADDED
+    outcome2 = r.want_present("10.0.0.5:8000", "default")  # second → READIED
+
+    assert outcome2.action in {Action.NONE, Action.READIED}
+    bs = BackendState(mgr.state_dir, mgr.lb.host, pool="default")
+    assert bs.list().count("10.0.0.5:8000") == 1

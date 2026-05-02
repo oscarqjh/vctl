@@ -12,7 +12,8 @@ import enum
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from vctl.lb.errors import PoolNotFound
+from vctl.lb.errors import BackendOpFailed, LbUnreachable, PoolNotFound
+from vctl.lb.routing import _name_for
 from vctl.lb.runtime import BackendStatus, RuntimeClient, lb_admin_client
 from vctl.lb.state import BackendState
 
@@ -120,3 +121,55 @@ class Reconciler:
     def diff_all(self) -> list[Drift]:
         """Return one Drift per configured pool."""
         return [self.diff(pool.name) for pool in self.mgr.lb.pools]
+
+    # ---- mutating API ----
+
+    def want_present(self, ep: str, pool: str) -> Outcome:
+        """Ensure ep is registered in haproxy and in the state file.
+
+        Invariant: state file is never written before haproxy acknowledges.
+
+        Action mapping based on pre-state:
+          not in_haproxy and not in_state → ADDED
+          not in_haproxy and     in_state → READIED (re-registered)
+              in_haproxy and not in_state → ADOPTED (state file catches up)
+              in_haproxy and     in_state → READIED (idempotent re-heal)
+
+        Raises:
+          PoolNotFound: if pool is not in mgr.lb.pools.
+          LbUnreachable: if both unix socket and TCP admin are unreachable.
+          BackendOpFailed: if haproxy admin command raises RuntimeError.
+        """
+        self._validate_pool(pool)
+        backend_section = f"pool_{pool}"
+
+        client = lb_admin_client(self.mgr)
+        if client is None:
+            raise LbUnreachable(
+                sock=str(self.mgr.sock_path),
+                tcp=f"{self.mgr.lb.host}:{self.mgr.lb.admin.bind_port}",
+            )
+
+        haproxy_map = self._haproxy_servers(backend_section, client)
+        in_haproxy = ep in haproxy_map
+        in_state = ep in BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).list()
+
+        if not in_haproxy:
+            try:
+                client.add_server(backend_section, _name_for(ep), ep)
+            except RuntimeError as exc:
+                raise BackendOpFailed(op="add_server", ep=ep, backend=backend_section) from exc
+
+        try:
+            client.set_state(backend_section, _name_for(ep), "ready")
+        except RuntimeError as exc:
+            raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
+
+        if not in_state:
+            BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).add(ep)
+
+        if not in_haproxy and not in_state:
+            return Outcome(ep=ep, pool=pool, action=Action.ADDED)
+        if in_haproxy and not in_state:
+            return Outcome(ep=ep, pool=pool, action=Action.ADOPTED)
+        return Outcome(ep=ep, pool=pool, action=Action.READIED)
