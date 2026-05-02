@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import multiprocessing as mp
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -13,6 +15,32 @@ from vctl.lb.manager import LbManager
 from vctl.lb.reconciler import Action, Drift, Outcome, Reconciler
 from vctl.lb.runtime import BackendStatus
 from vctl.lb.state import BackendState
+
+
+def _concurrent_want_present_worker(
+    args: tuple[str, str, str, str],
+) -> tuple[str, str]:
+    """Module-level worker for spawn-based multiprocessing pickling.
+
+    Sets VCTL_TEST_NO_SOCKET=1 in the spawned process so haproxy admin
+    becomes a no-op (parent's monkeypatch does not propagate to spawned
+    children). Returns (ep, action.value) for the caller to assert on.
+    """
+    os.environ["VCTL_TEST_NO_SOCKET"] = "1"
+
+    state_dir, run_dir, lb_host, ep = args
+
+    pools = [Pool(name="default", served_model="*", bind_port=8100)]
+    lb = LbHaproxy(
+        host=lb_host,
+        admin=LbAdmin(bind_port=9999),
+        stats=LbStats(bind_port=8404),
+        pools=pools,
+    )
+    mgr = LbManager(lb=lb, state_dir=Path(state_dir), run_dir=Path(run_dir))
+    r = Reconciler(mgr)
+    outcome = r.want_present(ep, "default")
+    return (outcome.ep, outcome.action.value)
 
 
 def _make_mgr(tmp_path: Path, pool_names: list[str] | None = None) -> LbManager:
@@ -677,3 +705,40 @@ def test_reconcile_from_state_uses_state_file_as_target(
     eps_in_outcomes = {o.ep for o in outcomes}
     assert "10.0.0.5:8000" in eps_in_outcomes
     assert "10.0.0.6:8000" in eps_in_outcomes
+
+
+# ---------------------------------------------------------------------------
+# Task 11: Concurrency — multiprocess want_present same ep
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_want_present_same_ep_produces_one_state_entry(
+    tmp_path: Path,
+) -> None:
+    """Acceptance: 4 concurrent workers calling want_present for same ep.
+
+    Uses VCTL_TEST_NO_SOCKET=1 so haproxy calls are no-ops (_NoOpClient).
+    Relies on BackendState.add's flock for serialization correctness.
+    Final state file must have exactly one entry; all Outcomes valid.
+    """
+    state_dir = str(tmp_path / "state")
+    run_dir = str(tmp_path / "run")
+    os.makedirs(state_dir, exist_ok=True)
+    os.makedirs(run_dir, exist_ok=True)
+    lb_host = "10.0.0.1"
+    ep = "10.0.0.5:8000"
+
+    args = [(state_dir, run_dir, lb_host, ep)] * 4
+    ctx = mp.get_context("spawn")
+    with ctx.Pool(processes=4) as pool:
+        results = pool.map(_concurrent_want_present_worker, args)
+
+    valid_actions = {"added", "none", "readied", "adopted"}
+    for result_ep, result_action in results:
+        assert result_ep == ep, f"unexpected ep: {result_ep}"
+        assert result_action in valid_actions, f"unexpected action: {result_action}"
+
+    bs = BackendState(Path(state_dir), lb_host, pool="default")
+    final_entries = bs.list()
+    assert len(final_entries) == 1, f"expected 1 entry, got {len(final_entries)}: {final_entries}"
+    assert final_entries[0] == ep
