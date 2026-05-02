@@ -1,5 +1,18 @@
 # Backlog
 
+## v0.2.8 hotfix queue
+
+- [x] F11: `_do_add` mutates state file BEFORE admin-socket add_server (line ~162).
+  If haproxy refuses, state file already contains the entry → `lb info` shows
+  tracked-only. A5 docstring promised rollback; not implemented. Closed in v0.3.0
+  by routing through `Reconciler.want_present` (haproxy-ack-before-state-write
+  invariant enforced by construction).
+- [x] F12: `_do_auto_add` wraps both `cli.add_server` and `cli.set_state` in
+  `contextlib.suppress(Exception)`. Silent failure made user's drift undetectable
+  (auto-add returned 0 + no output, but 1/4 backends stayed unregistered).
+  Closed in v0.3.0 by routing through `Reconciler.reconcile_from_state` per pool;
+  failures are surfaced on stderr and accumulated; exits 1 if any pool failed.
+
 ## v0.2.4 — unified lb info
 
 - [x] Add `vctl lb info` unified dashboard (rich table, per-pool scur/qcur/running/waiting).

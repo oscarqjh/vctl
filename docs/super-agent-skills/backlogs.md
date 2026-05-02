@@ -2,7 +2,10 @@
 
 ## In Progress
 
-_(none — Phase 1 shipped 2026-05-02)_
+- **Reconciler Phase 2 — migrate scaling verbs to Reconciler**
+  - Spec: [specs/2026-05-02-reconciler-phase2-design.md](specs/2026-05-02-reconciler-phase2-design.md)
+  - Branch: `feat/reconciler-phase2` (cut from `feat/reconciler-phase1`)
+  - Migrates `_do_add` / `_do_remove` / `_do_drain` / `_do_auto_add` / `_do_remove_cli` / `_do_detach` to delegate state mutations to Reconciler. Closes F11 + F12. v0.3.0 bump.
 
 ## Up Next
 
