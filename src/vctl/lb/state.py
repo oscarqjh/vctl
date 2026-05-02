@@ -23,56 +23,6 @@ class BackendState:
         self.path = self.host_dir / f"{pool}_backends.txt"
         self.lock_path = self.host_dir / f"{pool}_backends.lock"
 
-    @classmethod
-    def migrate_if_needed(cls, state_dir: Path, lb_host: str) -> None:
-        """B12: Flock-protected, atomic legacy migration.
-
-        v0.1.0 layout: <state_dir>/<lb_host>_backends.txt (flat).
-        Move it under <lb_host>/default_backends.txt on first access.
-        Only one process performs the migration; concurrent callers wait on
-        the lock then no-op.
-        """
-        state_dir = Path(state_dir)
-        host_dir = state_dir / lb_host
-        host_dir.mkdir(parents=True, exist_ok=True)
-
-        legacy = state_dir / f"{lb_host}_backends.txt"
-        new_path = host_dir / "default_backends.txt"
-        migration_lock = host_dir / "_migration.lock"
-
-        if not legacy.exists():
-            return  # fast-path: nothing to migrate
-
-        migration_lock.touch(exist_ok=True)
-        with open(migration_lock, "r+", encoding="utf-8") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            try:
-                # Re-check under lock — another process may have finished already.
-                if not legacy.exists() or new_path.exists():
-                    return
-                # Atomic write: copy to temp file then os.replace.
-                with tempfile.NamedTemporaryFile(
-                    mode="w", dir=host_dir, delete=False, encoding="utf-8"
-                ) as tmp:
-                    tmp_name = tmp.name
-                    try:
-                        tmp.write(legacy.read_text(encoding="utf-8"))
-                        tmp.flush()
-                        os.fsync(tmp.fileno())
-                    except Exception:
-                        with contextlib.suppress(OSError):
-                            os.unlink(tmp_name)
-                        raise
-                os.replace(tmp_name, new_path)
-                # Remove legacy file + its lock if present.
-                with contextlib.suppress(OSError):
-                    legacy.unlink()
-                legacy_lock = state_dir / f"{lb_host}_backends.lock"
-                with contextlib.suppress(OSError):
-                    legacy_lock.unlink()
-            finally:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-
     @contextlib.contextmanager
     def _locked(self) -> Generator[None, None, None]:
         """Hold an exclusive flock on the pool's lock file for the duration."""

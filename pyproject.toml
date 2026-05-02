@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vctl"
-version = "0.3.0"
+version = "0.4.0"
 description = "Typed CLI for orchestrating a multi-pod vLLM fleet behind HAProxy."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -28,7 +28,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-migrate = ["ruamel.yaml>=0.18"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",

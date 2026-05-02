@@ -154,59 +154,6 @@ def test_c3_atomic_write_cleans_up_tmp_on_exception(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# C4 — config migrate: dry-run default, .bak, --force
-# ---------------------------------------------------------------------------
-
-
-def test_c4_migrate_dryrun_leaves_file_unchanged(tmp_path: Path) -> None:
-    """C4: migrate without --write → diff on stdout, file untouched."""
-    src = tmp_path / "cluster.yaml"
-    original = (FIX / "old_cluster.yaml").read_text()
-    src.write_text(original)
-    proc = _vctl("config", "migrate", str(src))
-    assert proc.returncode == 0
-    assert src.read_text() == original
-    assert not src.with_suffix(".yaml.bak").exists()
-
-
-def test_c4_migrate_write_creates_bak(tmp_path: Path) -> None:
-    """C4: --write creates .bak and rewrites file."""
-    src = tmp_path / "cluster.yaml"
-    original = (FIX / "old_cluster.yaml").read_text()
-    src.write_text(original)
-    proc = _vctl("config", "migrate", "--write", str(src))
-    assert proc.returncode == 0
-    assert "apiVersion: vctl/v1" in src.read_text()
-    bak = src.with_suffix(".yaml.bak")
-    assert bak.exists()
-    assert bak.read_text() == original
-
-
-def test_c4_migrate_write_refuses_existing_bak(tmp_path: Path) -> None:
-    """C4: existing .bak without --force → non-zero exit."""
-    src = tmp_path / "cluster.yaml"
-    src.write_text((FIX / "old_cluster.yaml").read_text())
-    bak = src.with_suffix(".yaml.bak")
-    bak.write_text("precious backup\n")
-    proc = _vctl("config", "migrate", "--write", str(src))
-    assert proc.returncode != 0
-    assert bak.read_text() == "precious backup\n"
-
-
-def test_c4_migrate_write_force_overwrites_bak(tmp_path: Path) -> None:
-    """C4: --write --force overwrites existing .bak."""
-    src = tmp_path / "cluster.yaml"
-    original = (FIX / "old_cluster.yaml").read_text()
-    src.write_text(original)
-    bak = src.with_suffix(".yaml.bak")
-    bak.write_text("old backup\n")
-    proc = _vctl("config", "migrate", "--write", "--force", str(src))
-    assert proc.returncode == 0
-    assert "apiVersion: vctl/v1" in src.read_text()
-    assert bak.read_text() == original
-
-
-# ---------------------------------------------------------------------------
 # C6 — serve/stop/preflight descriptions; --skip-preflight wired
 # ---------------------------------------------------------------------------
 

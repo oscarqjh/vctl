@@ -120,7 +120,7 @@ def test_config_env_var_overrides_default(tmp_path, monkeypatch) -> None:
     [
         pytest.param(
             ["config", "-h"],
-            ["validate", "show", "schema", "migrate"],
+            ["validate", "show", "schema"],
             id="c5_config_help_contains_verbs",
         ),
         pytest.param(

@@ -1,6 +1,6 @@
 """Thin client over the HAProxy admin socket (Unix or TCP).
 
-Encodes carry-overs from the bash prototype:
+Wire format conventions:
 - srv_admin_state is a BITMASK (MAINT bits 0x07, DRAIN bits 0x38)
 - srv_addr is IP-only; port decoded from server name (b_<ip>_<port>)
 - add_server is idempotent (returns 'already_present' on duplicate)
