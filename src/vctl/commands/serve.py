@@ -91,8 +91,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
             env[k] = str(v)
 
     # Don't pass --served-model-name; vllm defaults to model.name (the canonical
-    # HF id), which matches our pool routing key. Setting it explicitly is
-    # redundant and was a footgun when paired with profile served_as aliases.
+    # HF id), which matches our pool routing key. Setting it explicitly is redundant.
     cmd = [
         "vllm",
         "serve",

@@ -44,8 +44,6 @@ class LbManager:
         self.pid_path = self.run_dir / "haproxy.pid"
         self.sock_path = self.run_dir / "haproxy.sock"
         self.tmux_name = tmux_name
-        # B12: run legacy migration once at manager init (flock-protected inside BackendState)
-        BackendState.migrate_if_needed(self.state_dir, self.lb.host)
 
     @property
     def runtime_paths(self) -> RuntimePaths:

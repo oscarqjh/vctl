@@ -98,35 +98,16 @@ def test_profile_file_happy_path() -> None:
     assert not hasattr(cf.model, "served_as")
 
 
-def test_served_as_deprecated_shim_drops_field_and_warns() -> None:
-    """Old profiles with served_as load fine; the field is silently dropped
-    (with a deprecation warning) by the model_validator shim."""
-    import logging
+def test_served_as_now_rejected_as_unknown_field() -> None:
+    """v0.4.0: the served_as backwards-compat shim is removed. Profiles still
+    carrying the field now fail schema validation (extra='forbid')."""
+    import pytest
+    from pydantic import ValidationError
 
     from vctl.config.models import Model
 
-    records: list[logging.LogRecord] = []
-
-    class _Cap(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            records.append(record)
-
-    handler = _Cap()
-    logger = logging.getLogger("vctl.config.models")
-    logger.addHandler(handler)
-    old_level = logger.level
-    logger.setLevel(logging.WARNING)
-    try:
-        m = Model.model_validate({"name": "Qwen/Qwen3.5-9B", "served_as": "qwen3-9b"})
-    finally:
-        logger.removeHandler(handler)
-        logger.setLevel(old_level)
-
-    assert m.name == "Qwen/Qwen3.5-9B"
-    assert not hasattr(m, "served_as")
-    assert any("served_as" in r.getMessage() and "deprecated" in r.getMessage() for r in records), (
-        "expected deprecation warning in log records"
-    )
+    with pytest.raises(ValidationError):
+        Model.model_validate({"name": "Qwen/Qwen3.5-9B", "served_as": "qwen3-9b"})
 
 
 def test_vllm_args_lenient() -> None:

@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: uv pip install --system -e ".[dev,migrate]"
+      - run: uv pip install --system -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy --strict src/vctl

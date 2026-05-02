@@ -11,7 +11,6 @@ FIX = Path(__file__).parent / "fixtures"
 
 
 def _vctl(*args: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    # Always `python -m vctl` to avoid PATH collision with the bash prototype.
     cmd = [sys.executable, "-m", "vctl", *args]
     return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, env=env, timeout=10)
 

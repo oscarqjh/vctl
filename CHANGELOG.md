@@ -3,6 +3,32 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.0] - 2026-05-03
+
+### Removed (BREAKING)
+
+- **`vctl config migrate` command removed.** The bash/python prototype it once converted from is no longer supported. Operators with old-format YAML still in production must run `vctl config migrate` from a v0.3.x install first, then upgrade to v0.4.0.
+- **`src/vctl/config/migrate.py` module deleted.** Public functions `detect_kind`, `migrate_cluster`, `migrate_profile`, `dump_yaml` are gone.
+- **`[migrate]` optional dependency dropped** from `pyproject.toml`. `ruamel.yaml>=0.18` is no longer pulled in; `uv tool install "git+...vctl.git[migrate]"` will fail.
+- **`MIGRATION.md` removed** from the repo root.
+- **`BackendState.migrate_if_needed` classmethod removed** from `src/vctl/lb/state.py`. The v0.1.0 → v0.2.x state-file layout migration (flat `<state_dir>/<lb_host>_backends.txt` → per-pool `<state_dir>/<lb_host>/<pool>_backends.txt`) is gone. State files in the v0.1.0 layout must be migrated by running a v0.2.x–v0.3.x release first.
+- **`Model._drop_deprecated_served_as` validator shim removed** from `src/vctl/config/models.py`. Profile YAML files still carrying a `served_as:` field now fail schema validation (`ValidationError`, extra fields forbidden) instead of being silently dropped with a deprecation warning. Remove `served_as:` from every profile YAML before upgrading.
+
+### Changed
+
+- README "Migration from bash prototype" section deleted; install instructions no longer reference the `[migrate]` extra.
+- `vctl config -h` no longer lists `migrate`; verbs are `validate / show / schema`.
+- Inline comments in `lb/runtime.py`, `commands/serve.py`, `tests/test_commands_readonly.py` no longer reference the bash prototype.
+
+### Internal
+
+- `tests/test_lb_state_b.py` deleted (was the `migrate_if_needed` concurrency test suite).
+- `tests/test_migrate.py` deleted (was the `config migrate` end-to-end suite).
+- Two legacy-migration tests removed from `tests/test_lb_state.py`; four C4 migrate tests removed from `tests/test_commit_c.py`.
+- `served_as` test in `tests/test_config_models.py` flipped to assert `ValidationError` under the v0.4.0 strict schema.
+- `LbManager.__init__` no longer calls `BackendState.migrate_if_needed`.
+- 399 tests passing (was 414 in v0.3.0; net −15 from migration test removals).
+
 ## [0.3.0] - 2026-05-03
 
 ### Changed (BREAKING)

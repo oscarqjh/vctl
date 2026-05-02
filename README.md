@@ -1,6 +1,6 @@
 # vctl
 
-**vctl** is a typed Python CLI for orchestrating a multi-pod vLLM fleet behind an HAProxy load balancer. It replaces a bash/python prototype with a Pydantic v2 schema, atomic state management, structured logging, and a clean subcommand tree — so you can spin up, scale, and tear down vLLM inference backends with a single command instead of a pile of scripts.
+**vctl** is a typed Python CLI for orchestrating a multi-pod vLLM fleet behind an HAProxy load balancer. Pydantic v2 schema, atomic state management, structured logging, and a clean subcommand tree — spin up, scale, and tear down vLLM inference backends with a single command.
 
 ---
 
@@ -12,13 +12,7 @@ uv tool install git+https://github.com/oscarqjh/vctl.git
 
 Pin to a release tag (recommended):
 ```bash
-uv tool install git+https://github.com/oscarqjh/vctl.git@v0.2.0
-```
-
-To include the optional migration helper (converts the old bash-prototype YAML to `vctl/v1`):
-
-```bash
-uv tool install "git+https://github.com/oscarqjh/vctl.git[migrate]"
+uv tool install git+https://github.com/oscarqjh/vctl.git@v0.4.0
 ```
 
 Verify the install:
@@ -275,14 +269,13 @@ Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Setting
 | `lb detach` | Drain then remove a backend. |
 | `lb auto-add` | Discover live backends from the state file and attach all. |
 
-### `vctl config` — schema and migration
+### `vctl config` — schema and inspection
 
 | Command | Description |
 |---|---|
 | `config validate` | Validate `cluster.yaml` (and optional profile) against the Pydantic schema. |
 | `config show` | Print the fully-merged resolved config as YAML. |
 | `config schema` | Print the JSON schema for `cluster.yaml` or a profile. |
-| `config migrate OLD.yaml` | Convert old bash-prototype YAML to `vctl/v1` format. |
 
 ---
 
@@ -389,15 +382,3 @@ To build a version not in the pinned set (not recommended):
 VCTL_INSTALLER_INSECURE=1 vctl lb install
 ```
 
----
-
-## Migration from bash prototype
-
-If you have an old `cluster.yaml` in the `multi_node_dp/` prototype format:
-
-```bash
-vctl config migrate old_cluster.yaml          # prints migrated YAML to stdout
-vctl config migrate old_cluster.yaml -o cluster.yaml   # write in-place
-```
-
-The migrated file will have `apiVersion: vctl/v1` at the top and the new grouped schema. Run `vctl config validate` afterwards to confirm.
