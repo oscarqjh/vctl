@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.2.12] - 2026-05-02
+
+### Fixed
+- **Export `CUDA_VISIBLE_DEVICES` from `profile.resources` to vllm subprocess.**
+  Previously the field was only used for human-readable info display; the
+  subprocess inherited whatever was in the parent shell's env (often unset
+  or overly broad). Symptom: `--mm-processor-cache-type=shm` worker startup
+  crashes with `FileNotFoundError: ... VLLM_OBJECT_STORAGE_SHM_BUFFER_*`
+  because workers couldn't attach to the parent's shm segment when the GPU
+  set wasn't deterministic. Now `serve` sets
+  `env["CUDA_VISIBLE_DEVICES"] = rc.resources.cuda_visible_devices` before
+  spawning vllm, matching what manual `CUDA_VISIBLE_DEVICES=... vllm serve`
+  invocations do.
+
 ## [0.2.11] - 2026-05-02
 
 ### Changed

@@ -77,6 +77,12 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     env = os.environ.copy()
     venv_bin = str(Path(rc.cluster.venv) / "bin")
     env["PATH"] = f"{venv_bin}:{env['PATH']}"
+    # Export CUDA_VISIBLE_DEVICES from profile.resources so vllm sees the
+    # intended GPU set. Without this, vllm picks up the inherited env value
+    # (often unset or overly broad), which can break shm setup for
+    # --mm-processor-cache-type=shm and tensor-parallel placement.
+    if rc.resources.cuda_visible_devices:
+        env["CUDA_VISIBLE_DEVICES"] = rc.resources.cuda_visible_devices
     for k, v in rc.env.items():
         # D12: booleans must serialize as "true"/"false" (lowercase) for env export
         if isinstance(v, bool):
