@@ -369,3 +369,51 @@ def test_stop_force_kill_after_grace(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     # tmux_kill must have been called since the process never exited.
     assert vm.session_name in killed
+
+
+def test_restart_warns_on_config_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """restart() logs a warning when cmd.json differs from what fresh rc would produce."""
+    import logging
+
+    from vctl.vllm_manager import VllmManager
+
+    stop_called: list[bool] = []
+    start_called: list[bool] = []
+    monkeypatch.setattr(VllmManager, "stop", lambda self: stop_called.append(True))
+    monkeypatch.setattr(VllmManager, "start", lambda self: start_called.append(True))
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    # Write a cmd.json that differs from the current config
+    vm.cmd_path.write_text(json.dumps(["vllm", "serve", "OldModel/Name", "--port=9999"]))
+    vm.host_path.write_text(socket.gethostname())
+
+    with caplog.at_level(logging.WARNING, logger="vctl.vllm_manager"):
+        vm.restart()
+
+    assert any(
+        "config changed" in r.message.lower() or "drift" in r.message.lower()
+        for r in caplog.records
+    ), "expected warning about config drift"
+    assert stop_called
+    assert start_called
+
+
+def test_restart_calls_stop_then_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """restart() calls stop() before start() — order matters."""
+    from vctl.vllm_manager import VllmManager
+
+    order: list[str] = []
+    monkeypatch.setattr(VllmManager, "stop", lambda self: order.append("stop"))
+    monkeypatch.setattr(VllmManager, "start", lambda self: order.append("start"))
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    # No cmd.json — restart should still proceed (no drift warning possible)
+    vm.host_path.write_text(socket.gethostname())
+
+    vm.restart()
+    assert order == ["stop", "start"]

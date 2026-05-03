@@ -279,7 +279,47 @@ class VllmManager:
 
     def restart(self) -> None:
         """stop() → reload config → start(). Logs warning if cmd snapshot differs."""
-        raise NotImplementedError
+        rc = self.rc
+        port = rc.server.http_port
+
+        # Read stored argv snapshot if it exists.
+        if self.cmd_path.exists():
+            try:
+                old_argv: list[str] = json.loads(self.cmd_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                old_argv = []
+
+            # Compute what the current rc would produce.
+            new_argv: list[str] = [
+                "vllm",
+                "serve",
+                rc.model.name,
+                f"--data-parallel-size={rc.parallelism.data_parallel}",
+                f"--tensor-parallel-size={rc.parallelism.tensor_parallel}",
+                f"--port={port}",
+            ]
+            if rc.parallelism.api_server_count is not None:
+                new_argv.append(f"--api-server-count={rc.parallelism.api_server_count}")
+            for k, v in rc.vllm_args.items():
+                if v is True:
+                    new_argv.append(f"--{k}")
+                elif v is False:
+                    new_argv.append(f"--no-{k}")
+                else:
+                    new_argv.append(f"--{k}={v}")
+
+            if old_argv != new_argv:
+                _LOG.warning(
+                    "config drift detected for profile %r: "
+                    "running argv differs from current config. "
+                    "old=%r  new=%r",
+                    rc.profile_name,
+                    old_argv,
+                    new_argv,
+                )
+
+        self.stop()
+        self.start()
 
     def status(self) -> dict[str, object]:
         """Return tmux_alive, pid_alive, vllm_ready, lb_attached, started_at, log_size."""
