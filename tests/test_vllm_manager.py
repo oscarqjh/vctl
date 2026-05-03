@@ -417,3 +417,42 @@ def test_restart_calls_stop_then_start(tmp_path: Path, monkeypatch: pytest.Monke
 
     vm.restart()
     assert order == ["stop", "start"]
+
+
+def test_attach_calls_execvp_with_correct_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """attach() calls os.execvp with the correct tmux attach-session arguments."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: True)
+
+    execvp_calls: list[tuple[str, list[str]]] = []
+
+    def fake_execvp(prog: str, argv: list[str]) -> None:
+        execvp_calls.append((prog, argv))
+
+    monkeypatch.setattr(vm_mod.os, "execvp", fake_execvp)
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    vm.attach()
+
+    assert len(execvp_calls) == 1
+    prog, argv = execvp_calls[0]
+    assert prog == "tmux"
+    assert argv == ["tmux", "attach-session", "-t", "vctl-vllm-qwen3-9b"]
+
+
+def test_attach_raises_when_no_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """attach() raises RuntimeError with a helpful message when session does not exist."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    with pytest.raises(RuntimeError, match="no running session"):
+        vm.attach()

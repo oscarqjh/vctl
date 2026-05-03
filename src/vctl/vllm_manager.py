@@ -389,7 +389,13 @@ class VllmManager:
 
     def attach(self) -> None:
         """os.execvp into tmux attach-session -t <name>. Does not return."""
-        raise NotImplementedError
+        if not tmux_session_exists(self.session_name):
+            raise RuntimeError(
+                f"no running session for profile {self.rc.profile_name!r} "
+                f"(session {self.session_name!r} not found). "
+                "Start vllm first with `vctl serve`."
+            )
+        os.execvp("tmux", ["tmux", "attach-session", "-t", self.session_name])
 
     def logs(self, n: int = 50, follow: bool = False) -> int:
         """Tail log file. follow=True: subprocess.Popen(["tail", "-f", path])."""
