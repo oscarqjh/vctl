@@ -124,7 +124,7 @@ def dispatch(
         port = parsed.port or 8000
         return _do_attach(port, mgr, bs)
     if verb == "detach":
-        return _do_detach(mgr, bs)
+        return _do_detach(mgr, bs, force=getattr(parsed, "force", False))
     if verb == "auto-add":
         return _do_auto_add(mgr, bs)
     if verb == "health":
@@ -267,11 +267,18 @@ def _do_attach(port: int, mgr: LbManager, bs: BackendState) -> int:
     return _do_add(ep, mgr, bs_pool, pool_name=pool.name)
 
 
-def _do_detach(mgr: LbManager, bs: BackendState) -> int:
+def _do_detach(mgr: LbManager, bs: BackendState, force: bool = False) -> int:
     """Drain → wait for idle → remove the local-host ep across all known pools.
 
-    The drain-wait timeout (LB_DETACH_WAIT, default 30s) and metrics polling
+    The drain-wait timeout (LB_DETACH_WAIT, default 600s) and metrics polling
     are application-level concerns and stay here, not in Reconciler.
+
+    With ``force=True``, after the drain wait expires (regardless of whether
+    in-flight requests have actually finished) the active sessions are
+    force-closed via haproxy ``shutdown sessions server``. Destructive — drops
+    in-flight requests. Use when a stuck backend (crashed vllm with half-open
+    TCP) won't drain naturally and ``del server`` keeps refusing because
+    ``cur_sess > 0``.
     """
     self_ip = detect_self_ip()
     pool_names = _state_pools_in_config(mgr, bs)
@@ -311,6 +318,25 @@ def _do_detach(mgr: LbManager, bs: BackendState) -> int:
             if vllm_running <= 0.0 and (scur is None or scur <= 0):
                 break
             time.sleep(2)
+
+        # Step 2.5 (force only): after drain-wait window expired, if --force
+        # was given, drop any remaining sessions via haproxy admin so del
+        # server can succeed. Destructive: in-flight requests truncate.
+        if force:
+            client = _client(mgr)
+            if isinstance(client, RuntimeClient):
+                try:
+                    client.shutdown_sessions_server(backend_section, server_name)
+                    print(
+                        f"detach {ep}: force-closed remaining sessions (pool: {pname})",
+                        file=sys.stderr,
+                    )
+                except RuntimeError as exc:
+                    print(
+                        f"detach {ep}: shutdown_sessions_server failed: {exc} "
+                        f"(continuing to remove anyway)",
+                        file=sys.stderr,
+                    )
 
         # Step 3: remove via Reconciler (state file cleaned only after haproxy ack).
         try:

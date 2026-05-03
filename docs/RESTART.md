@@ -165,10 +165,16 @@ In-flight requests still on the backend when removal was attempted. Haproxy refu
    # When scur reaches 0:
    vctl lb detach
    ```
-2. **Force-close active sessions** (drops in-flight requests — destructive):
+2. **Force-close active sessions** (drops in-flight requests — destructive). Two ways:
    ```bash
+   # v0.4.8+: bundled --force flag does shutdown sessions then remove
+   vctl lb detach --force
+
+   # Equivalent manual:
    echo "shutdown sessions server pool_<name>/b_<ep_underscores>" | nc -w 2 <lb.host> <lb.admin.bind_port>
    vctl lb detach
    ```
 
 v0.4.7+ avoids this scenario in normal flow by waiting on both vllm + haproxy scur during drain. The 600s default `LB_DETACH_WAIT` covers most LLM workloads. Bump higher for very long generations: `LB_DETACH_WAIT=1800 vctl lb detach`.
+
+For backends stuck due to half-open TCP from a crashed vllm (vllm process gone but haproxy still counts cur_sess > 0), `vctl lb detach --force` is the right escape hatch — it doesn't wait for in-flight to drain naturally, just closes sessions and removes.
