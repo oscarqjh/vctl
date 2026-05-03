@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 from pathlib import Path
@@ -285,3 +286,86 @@ def test_status_cross_host_pidfile_skips_liveness_check(
     # Cross-host: cannot check liveness of a PID on a different host
     assert result.get("cross_host") is True
     assert result["pid_alive"] is None
+
+
+def test_stop_full_drain_sequence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stop() calls drain → wait_for_idle → remove → send-keys C-c → cleanup."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        vm_mod, "_do_drain", lambda ep, mgr, pool_name=None: calls.append("drain") or 0
+    )
+    monkeypatch.setattr(vm_mod, "_wait_for_idle", lambda port, timeout: calls.append("idle"))
+    monkeypatch.setattr(
+        vm_mod, "_do_remove", lambda ep, mgr, bs, pool_name=None: calls.append("remove") or 0
+    )
+    monkeypatch.setattr(vm_mod, "tmux_kill", lambda name: calls.append("kill"))
+    monkeypatch.setattr(
+        vm_mod.subprocess,
+        "run",
+        lambda *a, **kw: (calls.append("sendkeys"), MagicMock(returncode=0))[1],
+    )
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    # Write state files so stop() finds them.
+    vm.host_path.write_text(socket.gethostname())
+    vm.pid_path.write_text("1")  # PID 1 always dead (not our process)
+    vm.cmd_path.write_text(json.dumps(["vllm", "serve"]))
+
+    vm.stop()
+
+    assert "drain" in calls
+    assert "idle" in calls
+    assert "remove" in calls
+    assert "sendkeys" in calls
+    # State files cleaned up.
+    assert not vm.pid_path.exists()
+    assert not vm.cmd_path.exists()
+    assert not vm.host_path.exists()
+
+
+def test_stop_cross_host_guard_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stop() raises RuntimeError when host marker is a different host."""
+    from vctl.vllm_manager import VllmManager
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    vm.host_path.write_text("foreign-host-99")
+
+    with pytest.raises(RuntimeError, match="refusing operation"):
+        vm.stop()
+
+
+def test_stop_force_kill_after_grace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stop() calls tmux_kill when pid is still alive after VCTL_KILL_GRACE elapses."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    monkeypatch.setattr(vm_mod, "_do_drain", lambda ep, mgr, pool_name=None: 0)
+    monkeypatch.setattr(vm_mod, "_wait_for_idle", lambda port, timeout: None)
+    monkeypatch.setattr(vm_mod, "_do_remove", lambda ep, mgr, bs, pool_name=None: 0)
+    monkeypatch.setattr(vm_mod.subprocess, "run", lambda *a, **kw: MagicMock(returncode=0))
+
+    killed: list[str] = []
+    monkeypatch.setattr(vm_mod, "tmux_kill", lambda name: killed.append(name))
+
+    # Use our own PID — always alive — to simulate a process that won't die.
+    alive_pid = os.getpid()
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    vm.host_path.write_text(socket.gethostname())
+    vm.pid_path.write_text(str(alive_pid))
+    vm.cmd_path.write_text(json.dumps(["vllm", "serve"]))
+
+    # Override grace period to near-zero so the test doesn't actually wait.
+    monkeypatch.setenv("VCTL_KILL_GRACE", "0.1")
+
+    vm.stop()
+
+    # tmux_kill must have been called since the process never exited.
+    assert vm.session_name in killed

@@ -14,8 +14,8 @@ from pathlib import Path
 import httpx
 import psutil
 
-from vctl.commands.lb_scaling import _do_add
-from vctl.commands.serve import _wait_for_ready
+from vctl.commands.lb_scaling import _do_add, _do_drain, _do_remove
+from vctl.commands.serve import _wait_for_idle, _wait_for_ready
 from vctl.lb.manager import LbManager
 from vctl.lb.routing import pool_for_model
 from vctl.lb.state import BackendState
@@ -210,7 +210,72 @@ class VllmManager:
 
     def stop(self) -> None:
         """_do_drain → _wait_for_idle → _do_remove → tmux send-keys C-c → poll → kill-session."""
-        raise NotImplementedError
+        rc = self.rc
+        port = rc.server.http_port
+
+        # Cross-host guard.
+        if self.host_path.exists():
+            stored_host = self.host_path.read_text().strip()
+            if stored_host != socket.gethostname():
+                raise RuntimeError(
+                    f"refusing operation: state files belong to host {stored_host!r}, "
+                    f"current host is {socket.gethostname()!r}. "
+                    "Run this command on the correct host."
+                )
+
+        # Resolve endpoint from pidfile (best-effort; continue even if missing).
+        self_ip = detect_self_ip()
+        ep = f"{self_ip}:{port}"
+
+        state_dir = self.state_dir
+        run_dir_lb = self.run_dir / "lb"
+        mgr = LbManager(rc.lb, state_dir=state_dir, run_dir=run_dir_lb)
+        pool = pool_for_model(rc.lb, rc.model.name)
+        bs = BackendState(state_dir, rc.lb.host, pool=pool.name)
+
+        # Drain → wait for idle → remove.
+        drain_rc = _do_drain(ep, mgr, pool_name=pool.name)
+        if drain_rc != 0:
+            _LOG.warning("drain returned %d for %s; continuing with stop", drain_rc, ep)
+        lb_detach_wait = float(os.environ.get("LB_DETACH_WAIT", "600"))
+        _wait_for_idle(port, timeout=lb_detach_wait)
+        remove_rc = _do_remove(ep, mgr, bs, pool_name=pool.name)
+        if remove_rc != 0:
+            _LOG.warning("remove returned %d for %s; continuing with kill", remove_rc, ep)
+
+        # Send C-c to tmux session (graceful SIGINT to vllm).
+        subprocess.run(
+            ["tmux", "send-keys", "-t", self.session_name, "C-c", ""],
+            check=False,
+        )
+
+        # Poll for pid exit up to VCTL_KILL_GRACE.
+        pid: int | None = None
+        if self.pid_path.exists():
+            try:
+                pid = int(self.pid_path.read_text().strip())
+            except (ValueError, OSError):
+                pid = None
+
+        grace = float(os.environ.get("VCTL_KILL_GRACE", "30"))
+        if pid is not None:
+            deadline = time.monotonic() + grace
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except (ProcessLookupError, PermissionError):
+                    break
+                time.sleep(0.5)
+
+        # Force-kill session if still exists.
+        tmux_kill(self.session_name)
+
+        # Unlink state files (leave log for post-mortem).
+        for p in (self.pid_path, self.cmd_path, self.host_path):
+            with contextlib.suppress(OSError):
+                p.unlink()
+
+        _LOG.info("stopped vllm for profile %r", rc.profile_name)
 
     def restart(self) -> None:
         """stop() → reload config → start(). Logs warning if cmd snapshot differs."""
