@@ -169,7 +169,11 @@ class Resources(_Strict):
 class Parallelism(_Strict):
     data_parallel: int = Field(ge=1)  # D6: must be >= 1
     tensor_parallel: int = Field(ge=1)  # D6
-    api_server_count: int = Field(ge=1)  # D6
+    # Optional. When None, vctl omits --api-server-count and lets vllm default
+    # (= data_parallel). Setting api_server_count=1 with data_parallel>1 +
+    # mm-processor-cache-type=shm triggers vllm 0.19.x bug — see v0.4.13
+    # CHANGELOG. Profiles should leave this unset unless deliberately overriding.
+    api_server_count: int | None = Field(default=None, ge=1)
 
 
 class Server(_Strict):

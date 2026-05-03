@@ -3,11 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
-## [0.4.12] - 2026-05-03
+## [0.4.13] - 2026-05-03
 
 ### Fixed
 
-- **`vctl serve` no longer breaks vllm under `data_parallel>1` + `mm-processor-cache-type=shm`.** Symptom: vllm engine init failed with `FileNotFoundError: '/VLLM_OBJECT_STORAGE_SHM_BUFFER_<uuid>'` repeated across every WorkerProc, then `RuntimeError: Engine core initialization failed. Failed core proc(s): {}`. Root cause: `subprocess.Popen(..., start_new_session=True)` calls `setsid()`, which detaches the controlling tty and creates a new session. Under detached session, Python multiprocessing's `resource_tracker` and the DP workers' `shared_memory.SharedMemory(name=...)` attach paths desynchronize — the writer registers shm in one session/tracker, the readers (DP-spawned workers) try to attach in another and find no entry. Confirmed reproducible: `setsid vllm serve <same flags>` from a normal shell reproduced the failure exactly. Fix: replace `start_new_session=True` with `preexec_fn=os.setpgrp`, which gives the same SIGINT-isolation goal (vllm in its own PGID, so terminal-foreground SIGINT to vctl doesn't double-deliver) without leaving the session. D11 regression test updated to assert the new contract.
+- **vllm `FileNotFoundError: '/VLLM_OBJECT_STORAGE_SHM_BUFFER_<uuid>'` actually fixed.** v0.4.12's setpgrp change was based on a wrong hypothesis (the early `setsid manual` reproduction was misleading — when `setsid` was tested with a shorter wait the real bug had not yet had time to fire either). Iterative testing inside the actual pod identified the real root cause: vllm 0.19.2rc1 has a bug in `multimodal/registry.py:_get_cache_type` — the renderer (in API server) sees the global `data_parallel_size` and computes `is_ipc_supported = (api_process_count==1 AND (DP==1 OR external_lb))` → returns `"processor_only"`, so the writer (`ShmObjectStoreSenderCache`) is never instantiated. Each engine's worker process, however, sees engine-local `data_parallel_size=1` → `is_ipc_supported=True` → returns `"shm"`, so the worker tries to `ShmObjectStoreReceiverCache.attach(name)` to a shm the writer never created. Trigger combo: `api_server_count=1` + `data_parallel>1` + `mm-processor-cache-type=shm`. Confirmed by running 7 in-pod A/B tests: same combo fails consistently regardless of how vllm is launched (shell-direct, Python `Popen` no preexec, `Popen` with `setpgrp`, `Popen` with `setsid`); removing `--api-server-count` (vllm defaults it to `data_parallel`) lets the renderer see `_api_process_count=N==DP_N` → still `is_ipc_supported=False` but consistent → no shm path on either side → engine starts cleanly. Fixes:
+  - **Built-in templates** (`commands/templates.py`): `api_server_count` defaults updated to match `data_parallel` (8 for Qwen3.5-9B, 4 for Qwen3-VL-30B-A3B). Comment explains the gotcha.
+  - **`vctl serve` warning**: log a clear warning if profile combines `api_server_count=1` + `data_parallel>1` + `mm-processor-cache-type=shm`. Tells the operator exactly which knob to change.
+  - **Existing user profiles**: must edit `~/.vctl/models/<profile>.yaml` manually to set `api_server_count` to match `data_parallel`. (Old profiles weren't generated through templates and don't get auto-migrated.)
+
+### Note on v0.4.12
+
+v0.4.12 swapped `subprocess.Popen(start_new_session=True)` for `preexec_fn=os.setpgrp` based on a wrong diagnosis. The setpgrp change is harmless (same SIGINT isolation, no controlling-tty detach) and is kept. It does not, however, fix the shm bug — that fix lives in this v0.4.13.
+
+## [0.4.12] - 2026-05-03
+
+### Misdiagnosed (superseded by v0.4.13)
+
+- Replaced `start_new_session=True` with `preexec_fn=os.setpgrp` in `vctl serve`'s vllm `Popen` call, on the (wrong) belief that `setsid()` was breaking vllm's multimodal shm coordination. Subsequent in-pod testing showed the bug was actually `api_server_count=1` + DP>1 + shm-cache — see v0.4.13. The setpgrp change is retained because it's a strictly equivalent SIGINT-isolation primitive without controlling-tty detach. v0.4.12 itself **does not resolve** the shm crash.
 
 ## [0.4.11] - 2026-05-03
 

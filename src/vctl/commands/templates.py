@@ -125,10 +125,10 @@ parallelism:
   # Tensor-parallel slices within each engine. data_parallel * tensor_parallel
   # must equal num_gpus.
   tensor_parallel: 1
-  # Number of OpenAI API-server workers. Keep at 1 unless you've measured
-  # the HTTP frontend (not the GPU) as the bottleneck. >1 with shared NFS
-  # cache directories triggers FlashInfer FileLock contention.
-  api_server_count: 1
+  # api_server_count is intentionally omitted. vllm defaults to data_parallel
+  # which is what we want. Setting api_server_count=1 with data_parallel>1 +
+  # mm-processor-cache-type=shm triggers a vllm 0.19.x bug — see v0.4.13
+  # CHANGELOG. Don't add this line unless you know you need a non-default value.
 
 server:
   # Listening port for vllm OpenAI-compatible API.
@@ -170,7 +170,7 @@ parallelism:
   # MoE 30B fits comfortably on 8x80GB with TP=2 inside each DP rank.
   data_parallel: 4
   tensor_parallel: 2
-  api_server_count: 1
+  # api_server_count omitted on purpose — see Qwen3.5-9B template above.
 
 server:
   http_port: 8000

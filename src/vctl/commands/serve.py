@@ -98,9 +98,29 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         rc.model.name,
         f"--data-parallel-size={rc.parallelism.data_parallel}",
         f"--tensor-parallel-size={rc.parallelism.tensor_parallel}",
-        f"--api-server-count={rc.parallelism.api_server_count}",
         f"--port={rc.server.http_port}",
     ]
+    # api_server_count is optional. When omitted vllm defaults to data_parallel,
+    # which is what we want. Forcing api_server_count=1 with data_parallel>1 +
+    # mm-processor-cache-type=shm hits a vllm 0.19.x bug: renderer (in API
+    # server) computes cache_type="processor_only" while workers compute "shm",
+    # so workers FileNotFoundError on shm_open against a shm the writer never
+    # made. See vllm multimodal/registry.py:_get_cache_type.
+    if rc.parallelism.api_server_count is not None:
+        cmd.append(f"--api-server-count={rc.parallelism.api_server_count}")
+        if (
+            rc.parallelism.api_server_count == 1
+            and rc.parallelism.data_parallel > 1
+            and rc.vllm_args.get("mm-processor-cache-type") == "shm"
+        ):
+            _LOG.warning(
+                "config will hit vllm shm bug: api_server_count=1 + data_parallel=%d + "
+                "mm-processor-cache-type=shm. Remove api_server_count from the profile "
+                "(vllm will default to data_parallel), or change mm-processor-cache-type "
+                "to 'lru'. Continuing anyway — vllm WILL crash with FileNotFoundError "
+                "on shm_open.",
+                rc.parallelism.data_parallel,
+            )
     for k, v in rc.vllm_args.items():
         # vLLM uses argparse BooleanOptionalAction for boolean flags
         # (e.g. --enable-prefix-caching / --no-enable-prefix-caching).
@@ -114,13 +134,12 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
 
     _LOG.info("spawning %s", " ".join(cmd))
     # D11: place vllm in its own PGID so SIGINT to vctl doesn't double-deliver
-    # via the terminal foreground-PG. Was previously start_new_session=True, but
-    # setsid() detaches the controlling tty and breaks vllm's multiproc shm
-    # coordination under data_parallel + mm-processor-cache-type=shm: workers
-    # spawn in a different session than the resource_tracker that registers
-    # /VLLM_OBJECT_STORAGE_SHM_BUFFER_<uuid>, and FileNotFoundError on shm_open
-    # cascades into engine-core init failure (v0.4.11). preexec_fn=os.setpgrp
-    # gives the same SIGINT isolation without leaving the session.
+    # via the terminal foreground-PG. v0.4.12 changed from start_new_session=True
+    # (setsid) to preexec_fn=os.setpgrp on a wrong hypothesis about a vllm shm
+    # bug — the actual cause was api_server_count=1 + DP>1 + shm-cache (see
+    # v0.4.13 CHANGELOG). The setpgrp change is harmless and gives the same
+    # SIGINT isolation as setsid without detaching the controlling tty, so
+    # we keep it.
     proc = subprocess.Popen(cmd, env=env, preexec_fn=os.setpgrp)
 
     # I-1: compute ep and install signal handlers BEFORE waiting for readiness so
