@@ -104,7 +104,13 @@ class RuntimeClient:
 
     def add_server(self, backend: str, name: str, ep: str) -> Literal["new", "already_present"]:
         # B6: parse success/already-present tokens; raise on errors.
-        out = self._send(f"add server {backend}/{name} {ep} check")
+        # v0.4.9: include `on-marked-down shutdown-sessions` so dynamic adds
+        # match the static-cfg server line — when health check marks the
+        # server DOWN, kill its sessions immediately rather than letting
+        # them hang on a dead backend.
+        out = self._send(
+            f"add server {backend}/{name} {ep} check on-marked-down shutdown-sessions"
+        )
         stripped = out.strip()
         low = stripped.lower()
         if low.startswith("new server") or stripped == "":

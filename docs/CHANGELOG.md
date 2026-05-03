@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.9] - 2026-05-03
+
+### Fixed
+
+- **HAProxy now retries failed requests on another backend** (`option redispatch` + `retries 3` in the rendered `defaults` block). Previously, when a backend connection failed (refused, reset, timeout), haproxy returned the error to the client. Eval/inference workloads saw `503 No server available` until the failed backend was finally marked DOWN by the health check (90s with `inter 30s fall 3` config). Now haproxy fans the failed request out to a healthy backend before giving up. Fundamental TCP-proxy limitation around mid-stream failover still applies — but for plain non-streaming REST calls (the common case), retry-on-failure now works.
+- **Backends marked DOWN by the health check have their existing sessions force-closed immediately** (`on-marked-down shutdown-sessions` on every server line). Previously, when a vllm crashed mid-request, haproxy detected DOWN but the half-open TCP connections kept counting toward `cur_sess`, blocking subsequent `del server` calls. Now those sessions are flushed at the moment haproxy decides the server is DOWN; clients see a clean error and the backend can be removed.
+- **Dynamic `add server` admin commands now include the same `on-marked-down shutdown-sessions` flag** as static-cfg server lines, so backends added via `vctl lb add` or `vctl serve` get the same behavior as those rendered into the cfg at `lb start` time.
+
+### Operator action required
+
+After upgrading, **restart haproxy** to pick up the new cfg flags. `vctl lb reload` re-renders the cfg and graceful-reloads haproxy without dropping connections. Without this step the new defaults don't apply to a running LB.
+
 ## [0.4.8] - 2026-05-03
 
 ### Added
