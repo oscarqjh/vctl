@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.5] - 2026-05-03
+
+### Fixed
+
+- **`vctl lb detach` / `lb remove` / `lb auto-add` no longer exit 3 on stale state-file pools.** Previously, if the state directory contained a `<pool>_backends.txt` file for a pool no longer present in `cluster.yaml` (e.g., leftover from earlier single-pool config), the pool-iteration loop in these verbs would call `Reconciler.want_*` with the stale pool name → `PoolNotFound` → exit 3 on the first stale entry. Now a new helper `lb_scaling._state_pools_in_config(mgr, bs)` filters the state-file pool list to those present in `mgr.lb.pools`, prints a `warning: skipping stale state files for unconfigured pools: [...]` line to stderr, and continues with the valid subset. Operators can clean up the stale files manually (`rm <state_dir>/<lb_host>/<pool>_backends.{txt,lock}`) but vctl no longer fails because of them.
+
 ## [0.4.4] - 2026-05-03
 
 ### Added

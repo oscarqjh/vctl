@@ -44,6 +44,32 @@ def _exit_for(exc: ReconcilerError) -> int:
     return 1
 
 
+def _state_pools_in_config(mgr: LbManager, bs: BackendState) -> list[str]:
+    """Return state-file pool names filtered to those configured in mgr.lb.pools.
+
+    Pools present in the state file but not in the LB config are stale (e.g.,
+    leftover from an earlier cluster.yaml that defined different pools). We
+    print a warning to stderr and skip them so verbs like `lb detach`,
+    `lb remove`, `lb auto-add` don't fail with PoolNotFound on the first
+    stale entry.
+
+    If the state file is empty, fall back to all configured pools (so a
+    cold cluster can still be reconciled from haproxy's POV).
+    """
+    configured = {p.name for p in mgr.lb.pools}
+    state_pools = BackendState.list_pools(bs.state_dir, bs.lb_host)
+    stale = [p for p in state_pools if p not in configured]
+    if stale:
+        print(
+            f"warning: skipping stale state files for unconfigured pools: {stale}",
+            file=sys.stderr,
+        )
+    valid = [p for p in state_pools if p in configured]
+    if not valid:
+        return list(configured)
+    return valid
+
+
 def dispatch(
     verb: str, parsed: argparse.Namespace, ns: argparse.Namespace, mgr: LbManager, bs: BackendState
 ) -> int:
@@ -92,9 +118,7 @@ def _do_remove_cli(ep: str, mgr: LbManager, bs: BackendState) -> int:
     _do_auto_add's accumulate-and-continue model because remove-cli is a single-ep
     operation, not a bulk reconcile.
     """
-    pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
-    if not pool_names:
-        pool_names = [p.name for p in mgr.lb.pools]
+    pool_names = _state_pools_in_config(mgr, bs)
 
     # First match: scan state files (cheap, no socket).
     for pname in pool_names:
@@ -209,9 +233,7 @@ def _do_detach(mgr: LbManager, bs: BackendState) -> int:
     are application-level concerns and stay here, not in Reconciler.
     """
     self_ip = detect_self_ip()
-    pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
-    if not pool_names:
-        pool_names = [p.name for p in mgr.lb.pools]
+    pool_names = _state_pools_in_config(mgr, bs)
 
     rec = Reconciler(mgr)
     for pname in pool_names:
@@ -256,9 +278,7 @@ def _do_auto_add(mgr: LbManager, bs: BackendState) -> int:
     each is surfaced on stderr and accumulated. Exits 1 if any pool failed,
     so operators can detect drift instead of silently relying on stale state.
     """
-    pool_names = BackendState.list_pools(bs.state_dir, bs.lb_host)
-    if not pool_names:
-        pool_names = [p.name for p in mgr.lb.pools]
+    pool_names = _state_pools_in_config(mgr, bs)
     rec = Reconciler(mgr)
     failed: list[str] = []
     for pname in pool_names:

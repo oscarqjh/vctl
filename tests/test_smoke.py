@@ -53,4 +53,4 @@ def test_pyproject_version_matches_module_version() -> None:
     pkg_version = pyproject["project"]["version"]
     from vctl import __version__
 
-    assert pkg_version == __version__ == "0.4.4"
+    assert pkg_version == __version__ == "0.4.5"
