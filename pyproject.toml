@@ -53,4 +53,5 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 markers = [
     "integration: requires a real haproxy binary on PATH",
+    "vllm_supervisor_integration: requires a real tmux binary and a vllm stub HTTP server",
 ]

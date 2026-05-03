@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,28 @@ if str(SRC) not in sys.path:
 # Keep tests env-deterministic.
 for var in ("VCTL_PROFILE", "MODEL_PROFILE", "VCTL_LB__HOST"):
     os.environ.pop(var, None)
+
+
+# ---------------------------------------------------------------------------
+# Auto-skip integration markers unless explicitly requested via -m
+# ---------------------------------------------------------------------------
+
+_SLOW_MARKERS = ("integration", "vllm_supervisor_integration")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: Sequence[pytest.Item]) -> None:
+    """Skip tests decorated with slow integration markers unless the marker is
+    explicitly requested on the command line (e.g. ``-m vllm_supervisor_integration``).
+    """
+    marker_expr = config.option.markexpr if hasattr(config.option, "markexpr") else ""
+    for marker_name in _SLOW_MARKERS:
+        if marker_name in marker_expr:
+            # Marker was explicitly requested — let pytest run them as-is.
+            continue
+        skip_mark = pytest.mark.skip(reason=f"requires real environment; run with -m {marker_name}")
+        for item in items:
+            if item.get_closest_marker(marker_name) is not None:
+                item.add_marker(skip_mark, append=False)
 
 
 # ---------------------------------------------------------------------------
