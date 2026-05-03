@@ -125,10 +125,14 @@ parallelism:
   # Tensor-parallel slices within each engine. data_parallel * tensor_parallel
   # must equal num_gpus.
   tensor_parallel: 1
-  # Number of OpenAI API-server workers. Keep at 1 unless you've measured
-  # the HTTP frontend (not the GPU) as the bottleneck. >1 with shared NFS
-  # cache directories triggers FlashInfer FileLock contention.
-  api_server_count: 1
+  # Number of OpenAI API-server workers. MUST equal data_parallel when
+  # mm-processor-cache-type=shm — vllm 0.19.x has a bug where api_server_count=1
+  # with DP>1 + shm-cache causes FileNotFoundError on shm_open in workers
+  # (writer in renderer sees global DP, reader in worker sees engine-local
+  # DP=1, so they compute different cache_type and reader attaches to a shm
+  # the writer never created). See vllm multimodal/registry.py:_get_cache_type.
+  # vllm's default when omitted is data_parallel — matching that here.
+  api_server_count: 8
 
 server:
   # Listening port for vllm OpenAI-compatible API.
@@ -170,7 +174,12 @@ parallelism:
   # MoE 30B fits comfortably on 8x80GB with TP=2 inside each DP rank.
   data_parallel: 4
   tensor_parallel: 2
-  api_server_count: 1
+  # MUST equal data_parallel when mm-processor-cache-type=shm. vllm 0.19.x
+  # bug: api_server_count=1 + DP>1 + shm → FileNotFoundError on shm_open in
+  # workers (writer/reader cache_type mismatch). See vllm
+  # multimodal/registry.py:_get_cache_type. vllm's default when omitted is
+  # data_parallel — matching that here.
+  api_server_count: 4
 
 server:
   http_port: 8000
