@@ -399,4 +399,31 @@ class VllmManager:
 
     def logs(self, n: int = 50, follow: bool = False) -> int:
         """Tail log file. follow=True: subprocess.Popen(["tail", "-f", path])."""
-        raise NotImplementedError
+        import sys as _sys
+
+        if not self.log_path.exists():
+            print(
+                f"no log file found at {self.log_path}; "
+                f"vllm may not have started yet for profile {self.rc.profile_name!r}",
+                file=_sys.stderr,
+            )
+            return 1
+
+        if follow:
+            proc = subprocess.Popen(["tail", "-f", str(self.log_path)])
+            try:
+                proc.wait()
+            except KeyboardInterrupt:
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    proc.terminate()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=5)
+            return 0
+
+        # Non-follow: read last n lines.
+        text = self.log_path.read_text(errors="replace")
+        all_lines = text.splitlines()
+        tail_lines = all_lines[-n:] if len(all_lines) > n else all_lines
+        for line in tail_lines:
+            print(line)
+        return 0

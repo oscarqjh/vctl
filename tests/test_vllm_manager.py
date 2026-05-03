@@ -456,3 +456,62 @@ def test_attach_raises_when_no_session(tmp_path: Path, monkeypatch: pytest.Monke
     vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
     with pytest.raises(RuntimeError, match="no running session"):
         vm.attach()
+
+
+def test_logs_n_lines(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """logs(n=5) prints the last 5 lines of the log file."""
+    from vctl.vllm_manager import VllmManager
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    lines = [f"line {i}" for i in range(20)]
+    vm.log_path.write_text("\n".join(lines) + "\n")
+
+    result = vm.logs(n=5)
+    assert result == 0
+    out = capsys.readouterr().out
+    printed = [ln for ln in out.strip().splitlines() if ln]
+    assert printed == lines[-5:]
+
+
+def test_logs_follow_invokes_tail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """logs(follow=True) invokes subprocess.Popen with tail -f and waits."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    popen_calls: list[list[str]] = []
+
+    mock_proc = MagicMock()
+    mock_proc.wait.return_value = 0
+    mock_proc.pid = 12345
+
+    def fake_popen(cmd: list[str], **kw: object) -> MagicMock:
+        popen_calls.append(cmd)
+        return mock_proc
+
+    monkeypatch.setattr(vm_mod.subprocess, "Popen", fake_popen)
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    vm.log_path.write_text("log line\n")
+
+    result = vm.logs(follow=True)
+    assert result == 0
+    assert len(popen_calls) == 1
+    assert popen_calls[0][0] == "tail"
+    assert "-f" in popen_calls[0]
+    assert str(vm.log_path) in popen_calls[0]
+
+
+def test_logs_no_log_file_returns_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """logs() returns 1 with an error message when the log file does not exist."""
+    from vctl.vllm_manager import VllmManager
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    # log_path does not exist
+
+    result = vm.logs()
+    assert result == 1
+    err = capsys.readouterr().err
+    assert "no log file" in err.lower() or str(vm.log_path) in err
