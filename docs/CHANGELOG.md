@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.4] - 2026-05-03
+
+### Added
+
+- **`docs/RESTART.md`** — safe restart procedures for both `vctl serve`–managed vllm and bare `vllm serve` + `vctl lb attach` setups. Step-by-step with the exact commands per mode, sequence rules (one backend at a time, `wait-ready` between), and troubleshooting for common drift annotations from `vctl lb info`.
+
+### Changed
+
+- **Documentation moved into `docs/`.** `BACKLOG.md`, `CHANGELOG.md`, `RELEASE.md` relocated from repo root → `docs/`. `README.md` stays at root and gains a Documentation section linking to the new paths. `tests/test_smoke.py` updated to read `docs/CHANGELOG.md`. `CLAUDE.md` stays at root (Claude Code reads it from there by convention).
+
 ## [0.4.3] - 2026-05-03
 
 ### Added

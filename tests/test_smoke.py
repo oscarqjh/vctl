@@ -37,7 +37,7 @@ def test_changelog_has_v0_1_0_section() -> None:
     """AT-14: CHANGELOG follows Keep a Changelog with version entries present."""
     from pathlib import Path
 
-    text = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text()
+    text = (Path(__file__).resolve().parent.parent / "docs" / "CHANGELOG.md").read_text()
     assert "## [0.1.0]" in text
     assert "## [0.2.0]" in text
     assert any(h in text for h in ("### Added", "### Changed", "### Fixed"))
@@ -53,4 +53,4 @@ def test_pyproject_version_matches_module_version() -> None:
     pkg_version = pyproject["project"]["version"]
     from vctl import __version__
 
-    assert pkg_version == __version__ == "0.4.3"
+    assert pkg_version == __version__ == "0.4.4"
