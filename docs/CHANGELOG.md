@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.7] - 2026-05-03
+
+### Changed
+
+- **`LB_DETACH_WAIT` default bumped from 30s → 600s.** LLM eval/inference workloads commonly have multi-minute generation; the old 30s default caused premature drain timeouts → haproxy refusing `del server` because `scur > 0` even in MAINT → backend stuck in MAINT. Tune via `LB_DETACH_WAIT=<seconds>` env var if needed. Affects `vctl lb detach`, `vctl stop`, and `vctl serve`'s SIGTERM drain handler.
+- **`vctl lb detach` drain-wait now polls both vllm `/metrics` AND haproxy `scur`.** Previously polled only vllm `num_requests_running`; if vllm reported 0 but haproxy still had connections in flight (LB queue depth, slow client disconnect), removal would fail. Now both must report 0 before removal proceeds. New helper `lb_scaling._haproxy_scur(cli, backend, server)` parses the `show stat` CSV to extract scur for one specific server.
+
+### Fixed
+
+- **Documented "stuck in MAINT" recovery in `docs/RESTART.md`.** New troubleshooting entry covers the case where `vctl lb info` shows `⚠ MAINT` and `remove_server failed`. Two paths: wait for in-flight to drain naturally, or force-close sessions via haproxy admin (destructive). Includes `LB_DETACH_WAIT` tuning guidance for very long generations.
+
 ## [0.4.6] - 2026-05-03
 
 ### Fixed

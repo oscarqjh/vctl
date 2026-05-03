@@ -44,6 +44,47 @@ def _exit_for(exc: ReconcilerError) -> int:
     return 1
 
 
+def _haproxy_scur(cli: RuntimeClient, backend_section: str, server_name: str) -> int | None:
+    """Return current session count (`scur`) for a specific haproxy server, or None.
+
+    Reads `show stat csv` and locates the row for backend_section/server_name.
+    Returns None if the server isn't found or the column index can't be parsed
+    (haproxy version drift). None is treated by callers as "unknown — keep waiting".
+    """
+    try:
+        raw = cli._send("show stat")  # noqa: SLF001
+    except Exception:
+        return None
+
+    header_cols: list[str] = []
+    col_pxname = 0
+    col_svname = 1
+    col_scur = 4
+
+    for line in raw.splitlines():
+        if line.startswith("# "):
+            header_cols = line.lstrip("# ").split(",")
+            if "pxname" in header_cols:
+                col_pxname = header_cols.index("pxname")
+            if "svname" in header_cols:
+                col_svname = header_cols.index("svname")
+            if "scur" in header_cols:
+                col_scur = header_cols.index("scur")
+            continue
+        if not line:
+            continue
+        cols = line.split(",")
+        if len(cols) <= max(col_pxname, col_svname, col_scur):
+            continue
+        if cols[col_pxname] != backend_section or cols[col_svname] != server_name:
+            continue
+        try:
+            return int(cols[col_scur])
+        except ValueError:
+            return None
+    return None
+
+
 def _state_pools_in_config(mgr: LbManager, bs: BackendState) -> list[str]:
     """Return state-file pool names filtered to those configured in mgr.lb.pools.
 
@@ -250,15 +291,26 @@ def _do_detach(mgr: LbManager, bs: BackendState) -> int:
             print(f"detach drain {ep} failed: {exc}", file=sys.stderr)
             return _exit_for(exc)
 
-        # Step 2: poll vllm metrics for idle (application-level drain wait).
-        timeout = float(os.environ.get("LB_DETACH_WAIT", "30"))
+        # Step 2: drain wait — poll BOTH vllm /metrics AND haproxy `scur` for idle.
+        # Haproxy scur is authoritative for "haproxy will refuse del server while > 0";
+        # vllm metric is the application-level view. Wait until both report 0.
+        # Default 600s — LLM eval workloads commonly have multi-minute generation.
+        timeout = float(os.environ.get("LB_DETACH_WAIT", "600"))
         deadline = time.monotonic() + timeout
         port = int(ep.rsplit(":", 1)[1])
+        backend_section = f"pool_{pname}"
+        server_name = _name_for(ep)
         while time.monotonic() < deadline:
-            probe = probe_local_vllm(port)
-            if probe.get("num_requests_running", 0.0) <= 0.0:
+            vllm_running = probe_local_vllm(port).get("num_requests_running", 0.0)
+            client = _client(mgr)
+            scur = (
+                _haproxy_scur(client, backend_section, server_name)
+                if isinstance(client, RuntimeClient)
+                else None
+            )
+            if vllm_running <= 0.0 and (scur is None or scur <= 0):
                 break
-            time.sleep(1)
+            time.sleep(2)
 
         # Step 3: remove via Reconciler (state file cleaned only after haproxy ack).
         try:

@@ -695,6 +695,32 @@ def test_state_pools_in_config_falls_back_to_configured_when_state_empty(
     ]
 
 
+def test_haproxy_scur_returns_int_for_known_server() -> None:
+    """v0.4.7: _haproxy_scur parses scur from `show stat` CSV for the named server."""
+    cli = MagicMock()
+    cli._send.return_value = (
+        "# pxname,svname,qcur,qmax,scur,smax,slim,stot,bin,bout\n"
+        "pool_default,b_10_0_0_5_8000,0,0,7,10,256,12345,1024,2048\n"
+        "pool_default,BACKEND,0,0,7,10,256,12345,1024,2048\n"
+    )
+    assert lb_scaling._haproxy_scur(cli, "pool_default", "b_10_0_0_5_8000") == 7
+
+
+def test_haproxy_scur_returns_none_for_unknown_server() -> None:
+    cli = MagicMock()
+    cli._send.return_value = (
+        "# pxname,svname,qcur,qmax,scur,smax,slim,stot\n"
+        "pool_default,b_10_0_0_99_8000,0,0,3,10,256,1\n"
+    )
+    assert lb_scaling._haproxy_scur(cli, "pool_default", "b_10_0_0_5_8000") is None
+
+
+def test_haproxy_scur_returns_none_on_send_error() -> None:
+    cli = MagicMock()
+    cli._send.side_effect = RuntimeError("socket closed")
+    assert lb_scaling._haproxy_scur(cli, "pool_default", "b_x") is None
+
+
 def test_do_detach_skips_stale_pool_no_longer_in_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

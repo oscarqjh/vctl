@@ -4,6 +4,8 @@ When a vllm process needs a restart (KV cache fragmentation after long uptime, O
 
 > **Sequence rule.** Restart **one backend at a time** in a multi-backend pool. After each restart, confirm the backend is back in service (`vctl lb wait-ready 1 --pool <name>`) before moving to the next. This keeps pool capacity at `N-1` minimum throughout.
 
+> **Drain timeout.** `LB_DETACH_WAIT` (default **600 seconds** as of v0.4.7) controls how long vctl waits for in-flight requests to finish before forcing removal. LLM eval/inference workloads commonly have multi-minute generation; the old 30s default was too short. Tune via `LB_DETACH_WAIT=<seconds> vctl ...` if you need shorter (interactive maintenance) or longer (very long generations) windows. The drain wait now polls **both** vllm `/metrics` (`num_requests_running`) **and** haproxy `show stat` (`scur`); both must report 0 before removal proceeds. Haproxy refuses `del server` while `scur > 0` even in MAINT, so checking it pre-emptively avoids the "stuck in MAINT" failure mode.
+
 ---
 
 ## Mode A — vllm started via `vctl serve` (recommended)
@@ -152,3 +154,21 @@ State file claims it's there but haproxy doesn't have it. Run `vctl lb auto-add`
 ### `vctl lb info` shows `⚠ untracked` for a backend
 
 HAProxy has it but state file doesn't. Run `vctl lb add <ep>` to adopt it into the state file (idempotent).
+
+### `vctl lb info` shows `⚠ MAINT` and detach reports `remove_server failed`
+
+In-flight requests still on the backend when removal was attempted. Haproxy refuses `del server` while `scur > 0` even when the server is in MAINT. Two ways forward:
+
+1. **Wait it out.** Watch scur drop, then re-run detach:
+   ```bash
+   watch 'echo "show stat" | nc -w 2 <lb.host> <lb.admin.bind_port> | grep b_<ep>'
+   # When scur reaches 0:
+   vctl lb detach
+   ```
+2. **Force-close active sessions** (drops in-flight requests — destructive):
+   ```bash
+   echo "shutdown sessions server pool_<name>/b_<ep_underscores>" | nc -w 2 <lb.host> <lb.admin.bind_port>
+   vctl lb detach
+   ```
+
+v0.4.7+ avoids this scenario in normal flow by waiting on both vllm + haproxy scur during drain. The 600s default `LB_DETACH_WAIT` covers most LLM workloads. Bump higher for very long generations: `LB_DETACH_WAIT=1800 vctl lb detach`.
