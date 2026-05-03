@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.10] - 2026-05-03
+
+### Fixed
+
+- **`vctl preflight` now checks `server.http_port` is not already in use on localhost.** Previously, if a stale vllm from a crashed `vctl serve` was still bound to port 8000, preflight (which only checked `gpus`/`shm`/`venv`/`lb_route`) didn't catch it. The new `vllm serve` subprocess would fail to bind, but `_wait_for_ready` polled `localhost:8000/v1/models` and got a successful response from the **stale** process — so vctl serve happily registered the stale ep with the LB. Result: LB routes traffic to the wrong vllm instance, the new vllm subprocess silently exits, and the operator has no idea anything is wrong. New `_check_vllm_port_free` attempts to bind `127.0.0.1:port` and fails preflight with a clear message ("port already in use; run `vctl stop` or kill the stale process first") if occupied. Exits 4.
+
 ## [0.4.9] - 2026-05-03
 
 ### Fixed
