@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.5.0] - 2026-05-04
+
+### Added
+
+- **`vctl serve` now runs vllm in a detached tmux session** (`vctl-vllm-<profile>`) and returns 0 immediately. SSH disconnect and shell hangup no longer kill vllm. New `VllmManager` class in `src/vctl/vllm_manager.py` mirrors the existing `LbManager` pattern.
+- **New `vctl serve` sub-verbs:** `status`, `stop`, `restart`, `attach`, `logs [-n N] [-f]`. Each operates on the local-host vllm process for the active profile via the tmux session.
+- **`--foreground` flag** preserves v0.4.x blocking behavior. `VCTL_SERVE_FOREGROUND=1` env var also supported.
+- **Cross-host guard:** `stop` and `restart` refuse to operate on state files belonging to a different host (`<profile>.host` marker check).
+- **Stale pidfile cleanup on `start()`:** pid dead or cmdline mismatch → state files silently removed, start proceeds.
+- **State files** under `~/.vctl/vllm/`: `<profile>.pid`, `<profile>.log`, `<profile>.cmd.json`, `<profile>.host` — all written atomically via `os.replace`.
+- **Integration test scaffolding:** new `vllm_supervisor_integration` pytest marker + `tests/test_vllm_manager_integration.py` with skeletons for AT-1, AT-3, AT-4, AT-5, AT-6. Run via `pytest -m vllm_supervisor_integration`.
+
+### Compatibility
+
+- Existing `tests/test_commands_serve.py` tests updated to add `--foreground` so they keep exercising the unchanged v0.4.x path.
+- No schema changes to `cluster.yaml` or profile YAML.
+- No new runtime dependencies.
+
 ## [0.4.14] - 2026-05-03
 
 ### Fixed
