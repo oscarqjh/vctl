@@ -382,3 +382,12 @@ To build a version not in the pinned set (not recommended):
 VCTL_INSTALLER_INSECURE=1 vctl lb install
 ```
 
+---
+
+## Documentation
+
+- [`docs/RESTART.md`](docs/RESTART.md) — safe procedures for restarting a vllm backend (both `vctl serve` mode and bare `vllm serve` mode).
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — release history.
+- [`docs/BACKLOG.md`](docs/BACKLOG.md) — open work + ideas.
+- [`docs/RELEASE.md`](docs/RELEASE.md) — release process notes.
+
