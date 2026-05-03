@@ -372,3 +372,19 @@ def test_resolve_ready_timeout_bad_value_uses_default(monkeypatch: pytest.Monkey
     rc.env = {"VLLM_ENGINE_READY_TIMEOUT_S": "not-a-number"}
     result = _resolve_ready_timeout(rc)
     assert result == 1800.0
+
+
+def test_serve_foreground_flag_default_false() -> None:
+    """--foreground flag defaults to False when not supplied."""
+    from vctl.commands.serve import _build_subparser
+
+    parsed = _build_subparser().parse_args([])
+    assert parsed.foreground is False
+
+
+def test_serve_foreground_flag_set() -> None:
+    """--foreground flag is True when supplied."""
+    from vctl.commands.serve import _build_subparser
+
+    parsed = _build_subparser().parse_args(["--foreground"])
+    assert parsed.foreground is True

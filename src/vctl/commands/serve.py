@@ -48,10 +48,23 @@ def _build_subparser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the preflight checks (GPU, /dev/shm, venv, LB route) before serving",
     )
+    p.add_argument(
+        "--foreground",
+        action="store_true",
+        default=False,
+        help=(
+            "Run vllm as a direct child process (v0.4.x behavior). "
+            "vctl blocks until vllm exits; SSH disconnect kills vllm. "
+            "Signals trigger drain → remove → kill. "
+            "Default: detached tmux session."
+        ),
+    )
     return p
 
 
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    # Detached path wired in Task 10; for now always foreground regardless of
+    # parsed.foreground value.
     parsed = _build_subparser().parse_args(argv_rest)
     return _run_foreground(ns, parsed)
 
