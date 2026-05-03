@@ -635,3 +635,91 @@ def test_exit_for_arbitrary_reconciler_error_subclass_returns_1() -> None:
 
     exc = _UnknownError("unknown haproxy failure")
     assert lb_scaling._exit_for(exc) == 1
+
+
+# ---------------------------------------------------------------------------
+# v0.4.5: stale state-file pools (no longer in cluster.yaml) are skipped
+# ---------------------------------------------------------------------------
+
+
+def test_state_pools_in_config_skips_stale(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """v0.4.5: state-file pools not in mgr.lb.pools are skipped with stderr warning."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    BackendState(state_dir, "10.0.0.1", pool="default").add("10.0.0.99:9999")
+    BackendState(state_dir, "10.0.0.1", pool="qwen3-5-9b").add("10.0.0.5:8000")
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        pools=[Pool(name="qwen3-5-9b", served_model="*", bind_port=8080)],
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    mgr = LbManager(lb, state_dir=state_dir, run_dir=run_dir)
+    bs = BackendState(state_dir, "10.0.0.1", pool="qwen3-5-9b")
+
+    valid = lb_scaling._state_pools_in_config(mgr, bs)
+    assert valid == ["qwen3-5-9b"]
+    err = capsys.readouterr().err
+    assert "stale" in err
+    assert "default" in err
+
+
+def test_state_pools_in_config_falls_back_to_configured_when_state_empty(
+    tmp_path: Path,
+) -> None:
+    """If state file is empty, fall back to all configured pools."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        pools=[
+            Pool(name="qwen3-5-9b", served_model="A", bind_port=8080),
+            Pool(name="qwen3-vl-30b", served_model="B", bind_port=8081),
+        ],
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    mgr = LbManager(lb, state_dir=state_dir, run_dir=run_dir)
+    bs = BackendState(state_dir, "10.0.0.1", pool="qwen3-5-9b")
+
+    assert sorted(lb_scaling._state_pools_in_config(mgr, bs)) == [
+        "qwen3-5-9b",
+        "qwen3-vl-30b",
+    ]
+
+
+def test_do_detach_skips_stale_pool_no_longer_in_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.4.5 regression: lb detach must not exit 3 when state dir contains a stale pool."""
+    import vctl.lb.reconciler as reconciler_mod
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    BackendState(state_dir, "10.0.0.1", pool="default").add("10.0.0.99:9999")
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        pools=[Pool(name="qwen3-5-9b", served_model="*", bind_port=8080)],
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    mgr = LbManager(lb, state_dir=state_dir, run_dir=run_dir)
+    bs = BackendState(state_dir, "10.0.0.1", pool="qwen3-5-9b")
+
+    monkeypatch.setattr(lb_scaling, "detect_self_ip", lambda: "127.0.0.1")
+    cli = MagicMock()
+    cli.show_servers_state.return_value = []
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
+
+    rc = lb_scaling._do_detach(mgr, bs)
+    assert rc == 0  # not 3 — stale 'default' was skipped, not validated
