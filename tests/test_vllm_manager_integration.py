@@ -251,10 +251,10 @@ def test_at4_restart_produces_new_pid(tmp_path: Path, vllm_stub_server: tuple[in
 
 
 @pytest.mark.vllm_supervisor_integration
-def test_at5_attach_session_and_detach(
+def test_at5_console_session_and_detach(
     tmp_path: Path,
 ) -> None:
-    """AT-5: attach() calls os.execvp with correct args; vllm process stays alive.
+    """AT-5: console() calls os.execvp with correct args; vllm process stays alive.
 
     In non-interactive context, we verify only the execvp argument shape
     (the unit test in test_vllm_manager.py covers the mock; this integration
