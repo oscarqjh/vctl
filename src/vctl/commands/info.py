@@ -24,7 +24,12 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         ("model", rc.model.name),
         ("self_ip", self_ip),
         ("dp / tp", f"{rc.parallelism.data_parallel} / {rc.parallelism.tensor_parallel}"),
-        ("api_servers", str(rc.parallelism.api_server_count)),
+        (
+            "api_servers",
+            str(rc.parallelism.api_server_count)
+            if rc.parallelism.api_server_count is not None
+            else f"(default: {rc.parallelism.data_parallel})",
+        ),
         ("vllm_port", str(rc.server.http_port)),
         ("lb.host", rc.lb.host),
     ]

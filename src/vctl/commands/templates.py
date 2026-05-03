@@ -125,14 +125,10 @@ parallelism:
   # Tensor-parallel slices within each engine. data_parallel * tensor_parallel
   # must equal num_gpus.
   tensor_parallel: 1
-  # Number of OpenAI API-server workers. MUST equal data_parallel when
-  # mm-processor-cache-type=shm — vllm 0.19.x has a bug where api_server_count=1
-  # with DP>1 + shm-cache causes FileNotFoundError on shm_open in workers
-  # (writer in renderer sees global DP, reader in worker sees engine-local
-  # DP=1, so they compute different cache_type and reader attaches to a shm
-  # the writer never created). See vllm multimodal/registry.py:_get_cache_type.
-  # vllm's default when omitted is data_parallel — matching that here.
-  api_server_count: 8
+  # api_server_count is intentionally omitted. vllm defaults to data_parallel
+  # which is what we want. Setting api_server_count=1 with data_parallel>1 +
+  # mm-processor-cache-type=shm triggers a vllm 0.19.x bug — see v0.4.13
+  # CHANGELOG. Don't add this line unless you know you need a non-default value.
 
 server:
   # Listening port for vllm OpenAI-compatible API.
@@ -174,12 +170,7 @@ parallelism:
   # MoE 30B fits comfortably on 8x80GB with TP=2 inside each DP rank.
   data_parallel: 4
   tensor_parallel: 2
-  # MUST equal data_parallel when mm-processor-cache-type=shm. vllm 0.19.x
-  # bug: api_server_count=1 + DP>1 + shm → FileNotFoundError on shm_open in
-  # workers (writer/reader cache_type mismatch). See vllm
-  # multimodal/registry.py:_get_cache_type. vllm's default when omitted is
-  # data_parallel — matching that here.
-  api_server_count: 4
+  # api_server_count omitted on purpose — see Qwen3.5-9B template above.
 
 server:
   http_port: 8000

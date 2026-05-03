@@ -98,28 +98,29 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         rc.model.name,
         f"--data-parallel-size={rc.parallelism.data_parallel}",
         f"--tensor-parallel-size={rc.parallelism.tensor_parallel}",
-        f"--api-server-count={rc.parallelism.api_server_count}",
         f"--port={rc.server.http_port}",
     ]
-    # vllm 0.19.x bug guard: api_server_count=1 + data_parallel>1 +
-    # mm-processor-cache-type=shm crashes workers with FileNotFoundError on
-    # shm_open. The renderer (in API server) sees the global DP and computes
-    # cache_type="processor_only", so it never creates the shm. Workers see
-    # engine-local DP=1 and compute cache_type="shm", trying to attach to a
-    # shm the writer never made. See vllm multimodal/registry.py:_get_cache_type.
-    if (
-        rc.parallelism.api_server_count == 1
-        and rc.parallelism.data_parallel > 1
-        and rc.vllm_args.get("mm-processor-cache-type") == "shm"
-    ):
-        _LOG.warning(
-            "config will hit vllm shm bug: api_server_count=1 + data_parallel=%d + "
-            "mm-processor-cache-type=shm. Set api_server_count to %d (= data_parallel) "
-            "in the profile, or change mm-processor-cache-type to 'lru'. Continuing "
-            "anyway — vllm WILL crash with FileNotFoundError on shm_open.",
-            rc.parallelism.data_parallel,
-            rc.parallelism.data_parallel,
-        )
+    # api_server_count is optional. When omitted vllm defaults to data_parallel,
+    # which is what we want. Forcing api_server_count=1 with data_parallel>1 +
+    # mm-processor-cache-type=shm hits a vllm 0.19.x bug: renderer (in API
+    # server) computes cache_type="processor_only" while workers compute "shm",
+    # so workers FileNotFoundError on shm_open against a shm the writer never
+    # made. See vllm multimodal/registry.py:_get_cache_type.
+    if rc.parallelism.api_server_count is not None:
+        cmd.append(f"--api-server-count={rc.parallelism.api_server_count}")
+        if (
+            rc.parallelism.api_server_count == 1
+            and rc.parallelism.data_parallel > 1
+            and rc.vllm_args.get("mm-processor-cache-type") == "shm"
+        ):
+            _LOG.warning(
+                "config will hit vllm shm bug: api_server_count=1 + data_parallel=%d + "
+                "mm-processor-cache-type=shm. Remove api_server_count from the profile "
+                "(vllm will default to data_parallel), or change mm-processor-cache-type "
+                "to 'lru'. Continuing anyway — vllm WILL crash with FileNotFoundError "
+                "on shm_open.",
+                rc.parallelism.data_parallel,
+            )
     for k, v in rc.vllm_args.items():
         # vLLM uses argparse BooleanOptionalAction for boolean flags
         # (e.g. --enable-prefix-caching / --no-enable-prefix-caching).
