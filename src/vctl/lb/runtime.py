@@ -135,6 +135,23 @@ class RuntimeClient:
             return
         raise RuntimeError(f"haproxy set_state failed: {stripped}")
 
+    def shutdown_sessions_server(self, backend: str, name: str) -> None:
+        """Force-close every active session for a specific server (destructive).
+
+        Drops in-flight requests; clients see truncated responses. Use only when
+        a backend is hung (vllm crashed mid-stream, half-open TCP) and `del server`
+        keeps refusing because cur_sess > 0.
+        """
+        out = self._send(f"shutdown sessions server {backend}/{name}")
+        stripped = out.strip()
+        if not stripped:
+            return
+        low = stripped.lower()
+        # `No such server` is idempotent — already gone.
+        if "no such server" in low:
+            return
+        raise RuntimeError(f"haproxy shutdown_sessions_server failed: {stripped}")
+
     def show_servers_state(self) -> list[BackendStatus]:
         raw = self._send("show servers state")
         rows: list[BackendStatus] = []
@@ -201,6 +218,9 @@ class _NoOpClient:
         pass
 
     def set_state(self, backend: str, name: str, state: str) -> None:
+        pass
+
+    def shutdown_sessions_server(self, backend: str, name: str) -> None:
         pass
 
     def show_servers_state(self) -> list[BackendStatus]:

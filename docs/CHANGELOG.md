@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.8] - 2026-05-03
+
+### Added
+
+- **`vctl lb detach --force` flag.** Force-closes active haproxy sessions for the local backend after the drain wait expires, then removes. Destructive — drops in-flight requests. Use when a backend is stuck because vllm crashed mid-stream and haproxy still counts `cur_sess > 0` from half-open TCP, blocking `del server`. New `RuntimeClient.shutdown_sessions_server(backend, name)` wraps haproxy's `shutdown sessions server <backend>/<name>` admin command, with idempotent handling of "no such server".
+
+### Fixed
+
+- **`docs/RESTART.md` updated** with the `vctl lb detach --force` escape hatch under the stuck-MAINT troubleshooting entry.
+
 ## [0.4.7] - 2026-05-03
 
 ### Changed

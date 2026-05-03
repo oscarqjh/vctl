@@ -54,10 +54,19 @@ def _build_subparser() -> argparse.ArgumentParser:
         "config",
         "reload",
         "auto-add",
-        "detach",
         "health",
     ):
         sp.add_parser(verb, help=_LB_VERB_HELP[verb])
+    de = sp.add_parser("detach", help=_LB_VERB_HELP["detach"])
+    de.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "force-close active sessions before removal "
+            "(destructive: drops in-flight requests). "
+            "Use when a stuck backend won't drain due to half-open TCP from a crashed vllm."
+        ),
+    )
     # C10: `where` now accepts an optional --pool filter.
     wh = sp.add_parser("where", help=_LB_VERB_HELP["where"])
     wh.add_argument(

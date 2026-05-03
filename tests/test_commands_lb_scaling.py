@@ -749,3 +749,102 @@ def test_do_detach_skips_stale_pool_no_longer_in_config(
 
     rc = lb_scaling._do_detach(mgr, bs)
     assert rc == 0  # not 3 — stale 'default' was skipped, not validated
+
+
+# ---------------------------------------------------------------------------
+# v0.4.8: lb detach --force calls shutdown_sessions_server before remove
+# ---------------------------------------------------------------------------
+
+
+def test_do_detach_force_calls_shutdown_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.4.8: detach(force=True) calls shutdown_sessions_server right before
+    want_absent so a backend stuck with half-open TCP can be removed."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.runtime import BackendStatus, RuntimeClient
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    BackendState(state_dir, "10.0.0.1", pool="default").add("127.0.0.1:8000")
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        pools=[Pool(name="default", served_model="*", bind_port=8080)],
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    mgr = LbManager(lb, state_dir=state_dir, run_dir=run_dir)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+
+    monkeypatch.setattr(lb_scaling, "detect_self_ip", lambda: "127.0.0.1")
+
+    cli = MagicMock(spec=RuntimeClient)
+    cli.show_servers_state.return_value = [
+        BackendStatus(
+            name="b_127_0_0_1_8000",
+            endpoint="127.0.0.1:8000",
+            op_state=2,
+            backend="pool_default",
+        )
+    ]
+    # Drain wait: claim vllm idle so loop exits immediately
+    monkeypatch.setattr(
+        "vctl.lb.probe.probe_local_vllm",
+        lambda port: {"num_requests_running": 0.0},
+    )
+    # haproxy reports scur=0 immediately
+    cli._send.return_value = "# pxname,svname,qcur,qmax,scur\npool_default,b_127_0_0_1_8000,0,0,0\n"
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
+    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+
+    rc = lb_scaling._do_detach(mgr, bs, force=True)
+    assert rc == 0
+    cli.shutdown_sessions_server.assert_called_once_with("pool_default", "b_127_0_0_1_8000")
+
+
+def test_do_detach_no_force_does_not_call_shutdown_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --force, shutdown_sessions_server is never invoked."""
+    import vctl.lb.reconciler as reconciler_mod
+    from vctl.lb.runtime import BackendStatus, RuntimeClient
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    BackendState(state_dir, "10.0.0.1", pool="default").add("127.0.0.1:8000")
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        pools=[Pool(name="default", served_model="*", bind_port=8080)],
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    mgr = LbManager(lb, state_dir=state_dir, run_dir=run_dir)
+    bs = BackendState(state_dir, "10.0.0.1", pool="default")
+
+    monkeypatch.setattr(lb_scaling, "detect_self_ip", lambda: "127.0.0.1")
+    cli = MagicMock(spec=RuntimeClient)
+    cli.show_servers_state.return_value = [
+        BackendStatus(
+            name="b_127_0_0_1_8000",
+            endpoint="127.0.0.1:8000",
+            op_state=2,
+            backend="pool_default",
+        )
+    ]
+    monkeypatch.setattr(
+        "vctl.lb.probe.probe_local_vllm",
+        lambda port: {"num_requests_running": 0.0},
+    )
+    cli._send.return_value = "# pxname,svname,qcur,qmax,scur\npool_default,b_127_0_0_1_8000,0,0,0\n"
+    monkeypatch.setattr(reconciler_mod, "lb_admin_client", lambda m: cli)
+    monkeypatch.setattr(lb_scaling, "_client", lambda m: cli)
+
+    rc = lb_scaling._do_detach(mgr, bs)  # no force
+    assert rc == 0
+    cli.shutdown_sessions_server.assert_not_called()
