@@ -199,20 +199,27 @@ def _capture_do_info(
 # ---------------------------------------------------------------------------
 
 
-def test_info_marks_live_endpoints(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_marks_live_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """F6 (info): state file has 2 endpoints; admin socket reports both → ✓ live."""
     mgr, bs = _make_f6_mgr(tmp_path)
     bs.add("10.1.2.5:8000")
     bs.add("10.1.2.6:8000")
 
     # LB is running.
-    monkeypatch.setattr(mgr, "status", lambda: {
-        "running": True, "pid": 1, "pid_alive": True, "admin_reachable": True,
-        "tmux_managed": True, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
-        "is_local_host": True,
-    })
+    monkeypatch.setattr(
+        mgr,
+        "status",
+        lambda: {
+            "running": True,
+            "pid": 1,
+            "pid_alive": True,
+            "admin_reachable": True,
+            "tmux_managed": True,
+            "cfg_path": "/tmp/h.cfg",
+            "admin_bind": "0.0.0.0:9001",
+            "is_local_host": True,
+        },
+    )
 
     # Fake live registry: both endpoints present in haproxy.
     registry = {"pool_default": {"10.1.2.5:8000", "10.1.2.6:8000"}}
@@ -236,18 +243,25 @@ def test_info_marks_live_endpoints(
     assert "untracked" not in out
 
 
-def test_info_marks_tracked_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_marks_tracked_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """F6 (info): state file has endpoint A; admin socket reports nothing → ⚠ tracked-only."""
     mgr, bs = _make_f6_mgr(tmp_path)
     bs.add("10.1.2.5:8000")
 
-    monkeypatch.setattr(mgr, "status", lambda: {
-        "running": True, "pid": 1, "pid_alive": True, "admin_reachable": True,
-        "tmux_managed": True, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
-        "is_local_host": True,
-    })
+    monkeypatch.setattr(
+        mgr,
+        "status",
+        lambda: {
+            "running": True,
+            "pid": 1,
+            "pid_alive": True,
+            "admin_reachable": True,
+            "tmux_managed": True,
+            "cfg_path": "/tmp/h.cfg",
+            "admin_bind": "0.0.0.0:9001",
+            "is_local_host": True,
+        },
+    )
 
     # Live registry is empty — endpoint not in haproxy.
     registry: dict[str, set[str]] = {}
@@ -269,18 +283,25 @@ def test_info_marks_tracked_only(
     assert "✓ live" not in out
 
 
-def test_info_marks_untracked_drift(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_marks_untracked_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """F6 (info): state file empty; admin socket reports endpoint B → ⚠ untracked."""
     mgr, bs = _make_f6_mgr(tmp_path)
     # No entries in state file.
 
-    monkeypatch.setattr(mgr, "status", lambda: {
-        "running": True, "pid": 1, "pid_alive": True, "admin_reachable": True,
-        "tmux_managed": True, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
-        "is_local_host": True,
-    })
+    monkeypatch.setattr(
+        mgr,
+        "status",
+        lambda: {
+            "running": True,
+            "pid": 1,
+            "pid_alive": True,
+            "admin_reachable": True,
+            "tmux_managed": True,
+            "cfg_path": "/tmp/h.cfg",
+            "admin_bind": "0.0.0.0:9001",
+            "is_local_host": True,
+        },
+    )
 
     # Live registry has an endpoint not in state file.
     registry = {"pool_default": {"10.1.2.7:8000"}}
@@ -301,18 +322,25 @@ def test_info_marks_untracked_drift(
     assert "⚠" in out
 
 
-def test_info_admin_unreachable_falls_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_admin_unreachable_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """F6 (info): _client → None → WARNING line, no crash, returns 0."""
     mgr, bs = _make_f6_mgr(tmp_path)
     bs.add("10.1.2.5:8000")
 
-    monkeypatch.setattr(mgr, "status", lambda: {
-        "running": True, "pid": 1, "pid_alive": True, "admin_reachable": True,
-        "tmux_managed": True, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
-        "is_local_host": True,
-    })
+    monkeypatch.setattr(
+        mgr,
+        "status",
+        lambda: {
+            "running": True,
+            "pid": 1,
+            "pid_alive": True,
+            "admin_reachable": True,
+            "tmux_managed": True,
+            "cfg_path": "/tmp/h.cfg",
+            "admin_bind": "0.0.0.0:9001",
+            "is_local_host": True,
+        },
+    )
     # Admin socket unreachable.
     monkeypatch.setattr(lb_scaling, "_client", lambda m: None)
 
@@ -326,18 +354,25 @@ def test_info_admin_unreachable_falls_back(
     assert "10.1.2.5:8000" in out
 
 
-def test_info_lb_stopped_skips_live_query(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_lb_stopped_skips_live_query(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """F6 (info): LB stopped → [LB STOPPED] banner, no admin socket call attempted."""
     mgr, bs = _make_f6_mgr(tmp_path)
     bs.add("10.1.2.5:8000")
 
-    monkeypatch.setattr(mgr, "status", lambda: {
-        "running": False, "pid": None, "pid_alive": False, "admin_reachable": False,
-        "tmux_managed": False, "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
-        "is_local_host": True,
-    })
+    monkeypatch.setattr(
+        mgr,
+        "status",
+        lambda: {
+            "running": False,
+            "pid": None,
+            "pid_alive": False,
+            "admin_reachable": False,
+            "tmux_managed": False,
+            "cfg_path": "/tmp/h.cfg",
+            "admin_bind": "0.0.0.0:9001",
+            "is_local_host": True,
+        },
+    )
 
     # Spy on _client — must not be called when LB is stopped.
     spy = MagicMock(return_value=None)
@@ -350,3 +385,53 @@ def test_info_lb_stopped_skips_live_query(
     assert "10.1.2.5:8000" in out
     # _client must NOT have been called.
     spy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# v0.4.2: wait-ready stdout cleanly separates ready pools from skipped-empty
+# ---------------------------------------------------------------------------
+
+
+def test_lb_wait_ready_message_separates_ready_from_skipped_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """v0.4.2 UX fix: success message says 'ready: ... (skipped empty: ...)'.
+
+    Previously printed 'all pools ready: A=4backends/200, B=empty' which read
+    as if B was also ready. New format clearly separates checked vs skipped.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from vctl.commands.lb import _wait_ready
+    from vctl.config.models import LbAdmin, LbHaproxy, LbStats, Pool
+    from vctl.lb.manager import LbManager
+    from vctl.lb.state import BackendState
+
+    state_dir = tmp_path / "state"
+    run_dir = tmp_path / "run"
+    state_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True)
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        pools=[
+            Pool(name="qwen3-5-9b", served_model="A", bind_port=8080),
+            Pool(name="qwen3-vl-30b", served_model="B", bind_port=8081),
+        ],
+    )
+    mgr = LbManager(lb, state_dir=state_dir, run_dir=run_dir)
+
+    # Pool A has backends; pool B is empty.
+    BackendState(state_dir, "10.0.0.1", pool="qwen3-5-9b").add("10.1.1.1:8000")
+
+    fake_resp = MagicMock(status_code=200)
+    with patch("httpx.get", return_value=fake_resp):
+        rc = _wait_ready(mgr, n=1)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ready: qwen3-5-9b=" in out
+    assert "skipped empty: qwen3-vl-30b" in out
+    # Old wording must not leak through.
+    assert "all pools ready" not in out
