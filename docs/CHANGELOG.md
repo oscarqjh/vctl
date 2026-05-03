@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.5.2] - 2026-05-04
+
+### Changed
+
+- **Renamed `vctl lb info` → `vctl lb status`.** Standardizes the runtime-state verb across the CLI: `vctl serve status` (Phase 1) and `vctl lb status` (this release) both report dynamic state, while `vctl info` (top-level) remains for static config display. **BREAKING:** scripts that called `vctl lb info` must update to `vctl lb status` — no alias kept.
+
 ## [0.5.1] - 2026-05-04
 
 ### Changed

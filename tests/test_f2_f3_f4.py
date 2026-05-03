@@ -282,7 +282,7 @@ class TestF4InfoCliOutput:
             mock_mgr.lb.pools = []
             mock_mgr.tmux_name = "vctl-lb"
             mock_mgr_fn.return_value = (mock_mgr, MagicMock(), MagicMock())
-            rc = lb_run(ns, ["info"])
+            rc = lb_run(ns, ["status"])
 
         assert rc == 0
 
@@ -305,6 +305,6 @@ class TestF4InfoCliOutput:
             mock_mgr.lb.pools = []
             mock_mgr.tmux_name = "vctl-lb"
             mock_mgr_fn.return_value = (mock_mgr, MagicMock(), MagicMock())
-            rc = lb_run(ns, ["info"])
+            rc = lb_run(ns, ["status"])
 
         assert rc == 0

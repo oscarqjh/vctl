@@ -517,12 +517,12 @@ def test_lb_scaling_do_health(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 # ---------------------------------------------------------------------------
 
 
-def test_lb_info_no_crash(tmp_path: Path) -> None:
-    """lb info exits 0 even when LB is stopped and admin socket unreachable."""
+def test_lb_status_no_crash(tmp_path: Path) -> None:
+    """lb status exits 0 even when LB is stopped and admin socket unreachable."""
     from vctl.commands.lb import run
 
     with patch.dict(os.environ, {"VCTL_CLUSTER__STATE_DIR": str(tmp_path / "state")}):
-        rc = run(_ns(tmp_path), ["info"])
+        rc = run(_ns(tmp_path), ["status"])
     assert rc == 0
 
 
