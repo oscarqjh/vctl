@@ -12,6 +12,7 @@ not vllm_supervisor_integration"). They require:
 
 from __future__ import annotations
 
+import contextlib
 import http.server
 import json
 import os
@@ -209,7 +210,7 @@ def test_at1_detached_start_survives_caller_exit(
         if pid_path.exists():
             try:
                 old_pid = int(pid_path.read_text().strip())
-                with psutil.suppress_exceptions():
+                with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
                     psutil.Process(old_pid).kill()
             except (ValueError, psutil.NoSuchProcess):
                 pass

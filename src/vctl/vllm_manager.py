@@ -111,6 +111,19 @@ class VllmManager:
         ]
         if rc.parallelism.api_server_count is not None:
             argv.append(f"--api-server-count={rc.parallelism.api_server_count}")
+            if (
+                rc.parallelism.api_server_count == 1
+                and rc.parallelism.data_parallel > 1
+                and rc.vllm_args.get("mm-processor-cache-type") == "shm"
+            ):
+                _LOG.warning(
+                    "config will hit vllm shm bug: api_server_count=1 + data_parallel=%d + "
+                    "mm-processor-cache-type=shm. Remove api_server_count from the profile "
+                    "(vllm will default to data_parallel), or change mm-processor-cache-type "
+                    "to 'lru'. Continuing anyway — vllm WILL crash with FileNotFoundError "
+                    "on shm_open.",
+                    rc.parallelism.data_parallel,
+                )
         for k, v in rc.vllm_args.items():
             if v is True:
                 argv.append(f"--{k}")

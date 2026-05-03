@@ -165,18 +165,12 @@ def _cmd_stop(ns: argparse.Namespace, argv_rest: list[str]) -> int:
 
 def _cmd_restart(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     """Stop vllm and start again under a fresh tmux session."""
-    from vctl.vllm_manager import VllmManager
-
     p = argparse.ArgumentParser(prog="vctl serve restart")
-    p.add_argument(
-        "--skip-preflight",
-        action="store_true",
-        help="Skip preflight checks on restart",
-    )
-    parsed = p.parse_args(argv_rest)
-    _ = parsed  # consumed; passed to start() indirectly via rc
+    p.parse_args(argv_rest)
 
     rc = resolve(ns.config, profile=ns.profile)
+    from vctl.vllm_manager import VllmManager  # lazy
+
     state_dir = Path(rc.cluster.state_dir)
     run_dir = Path.home() / ".vctl"
     vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
