@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.2] - 2026-05-03
+
+### Changed
+
+- **`vctl lb wait-ready` success message now separates checked pools from skipped-empty pools.** Was: `all pools ready: A=4backends/200, B=empty` (read as if B was also ready when in fact it was skipped). Now: `ready: A=4backends/200 (skipped empty: B)`. Behavior is unchanged — empty pools are still skipped (not blocking). Operators that need to block on a specific pool already had the answer via `vctl lb wait-ready N --pool <name>`, which continues to work and now produces a clean single-pool message.
+
 ## [0.4.1] - 2026-05-03
 
 ### Fixed

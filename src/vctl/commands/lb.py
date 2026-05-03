@@ -114,8 +114,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
             match = next((p for p in mgr.lb.pools if p.name == pool_name), None)
             if match is None:
                 print(
-                    f"unknown pool {pool_name!r}; "
-                    f"available: {[p.name for p in mgr.lb.pools]}",
+                    f"unknown pool {pool_name!r}; available: {[p.name for p in mgr.lb.pools]}",
                     file=sys.stderr,
                 )
                 return 3
@@ -196,8 +195,7 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
 
     admin_status = "(reachable)" if admin_reachable else "(unreachable)"
     proc_lines = [
-        f"pid {pid}  alive={str(pid_alive).lower()}  "
-        f"admin={admin_bind} {admin_status}",
+        f"pid {pid}  alive={str(pid_alive).lower()}  admin={admin_bind} {admin_status}",
         f"tmux: {mgr.tmux_name}  is_local_host={str(is_local_host).lower()}",
         f"cfg: {cfg_path}",
         f"stats UI: {stats_url}",
@@ -433,8 +431,8 @@ def _fetch_haproxy_stats(cli: object) -> dict[str, dict[str, dict[str, int | str
     col_qcur = 2
     col_scur = 4
     col_lastchg = 23  # typical haproxy 2.x offset; may vary
-    col_status = 17   # typical; may vary
-    col_addr = 73     # typical; may vary
+    col_status = 17  # typical; may vary
+    col_addr = 73  # typical; may vary
 
     header_cols: list[str] = []
 
@@ -514,8 +512,8 @@ def _build_live_registry(cli: object) -> dict[str, set[str]]:
             if len(parts) < 6:
                 continue
             backend_section = parts[1]  # column 1: backend name
-            name = parts[3]             # column 3: server name
-            srv_addr = parts[4]         # column 4: srv_addr
+            name = parts[3]  # column 3: server name
+            srv_addr = parts[4]  # column 4: srv_addr
             parsed = _parse_endpoint_from_name(name)
             if parsed is not None:
                 endpoint = f"{parsed[0]}:{parsed[1]}"
@@ -567,12 +565,13 @@ def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:
     while True:
         all_pools_ok = True
         any_pool_has_backends = False
-        details: list[str] = []
+        ready: list[str] = []
+        skipped_empty: list[str] = []
         for p in target_pools:
             pbs = BackendState(state_dir, mgr.lb.host, pool=p.name)
             registered = pbs.list()
             if not registered:
-                details.append(f"{p.name}=empty")
+                skipped_empty.append(p.name)
                 continue
             any_pool_has_backends = True
             url = f"http://{mgr.lb.host}:{p.bind_port}/v1/models"
@@ -582,15 +581,19 @@ def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:
             except Exception:
                 code = 0
             backends_label = f"{len(registered)}backend{'s' if len(registered) != 1 else ''}"
-            details.append(f"{p.name}={backends_label}/{code or 'ERR'}")
+            ready.append(f"{p.name}={backends_label}/{code or 'ERR'}")
             if code != 200 or len(registered) < n:
                 all_pools_ok = False
 
         if all_pools_ok and any_pool_has_backends:
-            print(f"all pools ready: {', '.join(details)}")
+            msg = f"ready: {', '.join(ready)}"
+            if skipped_empty:
+                msg += f" (skipped empty: {', '.join(skipped_empty)})"
+            print(msg)
             return 0
 
         if deadline is not None and time.monotonic() > deadline:
+            details = ready + [f"{p}=empty" for p in skipped_empty]
             print(
                 f"timed out: {', '.join(details)} (after {timeout_str}s)",
                 file=sys.stderr,
@@ -599,6 +602,7 @@ def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:
 
         now = time.monotonic()
         if now - last_log >= 30:
+            details = ready + [f"{p}=empty" for p in skipped_empty]
             print(f"waiting... {', '.join(details)}", file=sys.stderr)
             last_log = now
         sleep_s = 2.0
