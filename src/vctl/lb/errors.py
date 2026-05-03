@@ -32,12 +32,20 @@ class PoolNotFound(ReconcilerError):  # noqa: N818  # spec contract: naked descr
 class BackendOpFailed(ReconcilerError):  # noqa: N818  # spec contract: naked descriptive name
     """Raised when a haproxy admin command raises RuntimeError.
 
-    The original RuntimeError is attached as ``__cause__`` by the Reconciler.
-    The state file is left untouched whenever this exception propagates.
+    The original RuntimeError is attached as ``__cause__`` by the Reconciler
+    AND surfaced in the str() message so operators see what haproxy actually
+    said (e.g. ``"haproxy remove_server failed for ep='10.0.0.5:8000' in
+    backend='pool_default': Operation not permitted"``). The state file is
+    left untouched whenever this exception propagates.
     """
 
-    def __init__(self, *, op: str, ep: str, backend: str) -> None:
+    def __init__(
+        self, *, op: str, ep: str, backend: str, cause: BaseException | None = None
+    ) -> None:
         self.op = op
         self.ep = ep
         self.backend = backend
-        super().__init__(f"haproxy {op} failed for ep={ep!r} in backend={backend!r}")
+        msg = f"haproxy {op} failed for ep={ep!r} in backend={backend!r}"
+        if cause is not None:
+            msg += f": {cause}"
+        super().__init__(msg)

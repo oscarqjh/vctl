@@ -167,12 +167,16 @@ class Reconciler:
             try:
                 self._acquire().add_server(backend_section, _name_for(ep), ep)
             except RuntimeError as exc:
-                raise BackendOpFailed(op="add_server", ep=ep, backend=backend_section) from exc
+                raise BackendOpFailed(
+                    op="add_server", ep=ep, backend=backend_section, cause=exc
+                ) from exc
 
         try:
             self._acquire().set_state(backend_section, _name_for(ep), "ready")
         except RuntimeError as exc:
-            raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
+            raise BackendOpFailed(
+                op="set_state", ep=ep, backend=backend_section, cause=exc
+            ) from exc
 
         if not in_state:
             BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).add(ep)
@@ -218,11 +222,15 @@ class Reconciler:
             try:
                 self._acquire().set_state(backend_section, _name_for(ep), "maint")
             except RuntimeError as exc:
-                raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
+                raise BackendOpFailed(
+                    op="set_state", ep=ep, backend=backend_section, cause=exc
+                ) from exc
             try:
                 self._acquire().remove_server(backend_section, _name_for(ep))
             except RuntimeError as exc:
-                raise BackendOpFailed(op="remove_server", ep=ep, backend=backend_section) from exc
+                raise BackendOpFailed(
+                    op="remove_server", ep=ep, backend=backend_section, cause=exc
+                ) from exc
 
         if in_state:
             BackendState(self.mgr.state_dir, self.mgr.lb.host, pool=pool).remove(ep)
@@ -250,7 +258,9 @@ class Reconciler:
         try:
             self._acquire().set_state(backend_section, _name_for(ep), "drain")
         except RuntimeError as exc:
-            raise BackendOpFailed(op="set_state", ep=ep, backend=backend_section) from exc
+            raise BackendOpFailed(
+                op="set_state", ep=ep, backend=backend_section, cause=exc
+            ) from exc
 
         return Outcome(ep=ep, pool=pool, action=Action.DRAINED)
 

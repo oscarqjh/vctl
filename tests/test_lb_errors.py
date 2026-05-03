@@ -41,6 +41,28 @@ def test_backend_op_failed_is_reconciler_error() -> None:
     assert "pool_default" in msg
 
 
+def test_backend_op_failed_surfaces_cause_in_message() -> None:
+    """v0.4.6: when constructed with cause=, the haproxy error is in the str() message."""
+    cause = RuntimeError("haproxy remove_server failed: Operation not permitted")
+    err = BackendOpFailed(
+        op="remove_server",
+        ep="10.0.0.5:8000",
+        backend="pool_default",
+        cause=cause,
+    )
+    msg = str(err)
+    assert "remove_server" in msg
+    assert "Operation not permitted" in msg
+    assert "haproxy remove_server failed" in msg
+
+
+def test_backend_op_failed_without_cause_omits_colon_suffix() -> None:
+    """Backwards compat: cause= is optional; old call sites still work."""
+    err = BackendOpFailed(op="set_state", ep="10.0.0.5:8000", backend="pool_default")
+    msg = str(err)
+    assert msg.endswith("backend='pool_default'")  # no trailing ": ..."
+
+
 def test_catching_base_class_catches_all_subclasses() -> None:
     errors: list[ReconcilerError] = [
         LbUnreachable(sock="/s", tcp="h:1"),
