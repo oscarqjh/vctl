@@ -237,6 +237,47 @@ def test_preflight_check_venv_exists(tmp_path: Path) -> None:
     assert ok is True
 
 
+def test_preflight_check_vllm_port_free_when_unbound() -> None:
+    """v0.4.10: port-free check passes when nothing is on the port."""
+    import socket
+
+    from vctl.commands.preflight import _check_vllm_port_free
+
+    # Find an unused port by binding to 0 then immediately closing.
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    free_port = s.getsockname()[1]
+    s.close()
+
+    ok, msg = _check_vllm_port_free(free_port)
+    assert ok is True
+    assert "free" in msg
+
+
+def test_preflight_check_vllm_port_busy() -> None:
+    """v0.4.10: port-free check fails when something is already on the port.
+
+    Catches the stale-vllm scenario where the new vllm fails to bind but
+    _wait_for_ready polls the stale process and reports success."""
+    import socket
+
+    from vctl.commands.preflight import _check_vllm_port_free
+
+    occupier = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    occupier.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    occupier.bind(("127.0.0.1", 0))
+    occupier.listen(1)
+    busy_port = occupier.getsockname()[1]
+
+    try:
+        ok, msg = _check_vllm_port_free(busy_port)
+        assert ok is False
+        assert "already in use" in msg
+        assert "vctl stop" in msg
+    finally:
+        occupier.close()
+
+
 def test_preflight_check_lb_route_unreachable() -> None:
     from vctl.commands.preflight import _check_lb_route
 
