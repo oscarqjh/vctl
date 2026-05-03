@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.6] - 2026-05-03
+
+### Fixed
+
+- **`BackendOpFailed` now surfaces the underlying haproxy error in its `str()` message.** Previously CLI output was just `haproxy remove_server failed for ep='X' in backend='Y'` — operators had no way to see what haproxy actually said (e.g. `Operation not permitted`, `No such server`, `Server is in maintenance`). The original `RuntimeError` was attached as `__cause__` but never printed. New optional `cause=` kwarg on `BackendOpFailed.__init__`; Reconciler passes the underlying exception. Output is now: `haproxy remove_server failed for ep='10.0.0.5:8000' in backend='pool_default': Operation not permitted`. The five `raise BackendOpFailed(...) from exc` sites in `reconciler.py` (`want_present.add_server`, `want_present.set_state`, `want_absent.set_state`, `want_absent.remove_server`, `want_draining.set_state`) all updated.
+
 ## [0.4.5] - 2026-05-03
 
 ### Fixed
