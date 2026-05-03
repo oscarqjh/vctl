@@ -113,9 +113,15 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
             cmd.append(f"--{k}={v}")
 
     _LOG.info("spawning %s", " ".join(cmd))
-    # D11: start_new_session=True gives vllm its own PGID so SIGINT to vctl
-    # doesn't double-deliver to the vllm child via the terminal process group.
-    proc = subprocess.Popen(cmd, env=env, start_new_session=True)
+    # D11: place vllm in its own PGID so SIGINT to vctl doesn't double-deliver
+    # via the terminal foreground-PG. Was previously start_new_session=True, but
+    # setsid() detaches the controlling tty and breaks vllm's multiproc shm
+    # coordination under data_parallel + mm-processor-cache-type=shm: workers
+    # spawn in a different session than the resource_tracker that registers
+    # /VLLM_OBJECT_STORAGE_SHM_BUFFER_<uuid>, and FileNotFoundError on shm_open
+    # cascades into engine-core init failure (v0.4.11). preexec_fn=os.setpgrp
+    # gives the same SIGINT isolation without leaving the session.
+    proc = subprocess.Popen(cmd, env=env, preexec_fn=os.setpgrp)
 
     # I-1: compute ep and install signal handlers BEFORE waiting for readiness so
     # SIGINT during model loading does not orphan the vllm subprocess.
