@@ -62,7 +62,7 @@ def _build_subparser() -> argparse.ArgumentParser:
     return p
 
 
-_SUB_VERBS = {"status", "stop", "restart", "attach", "logs"}
+_SUB_VERBS = {"status", "stop", "restart", "console", "logs"}
 
 
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
@@ -75,7 +75,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
             "status": _cmd_status,
             "stop": _cmd_stop,
             "restart": _cmd_restart,
-            "attach": _cmd_attach,
+            "console": _cmd_console,
             "logs": _cmd_logs,
         }[sub](ns, rest)
 
@@ -182,11 +182,11 @@ def _cmd_restart(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     return 0
 
 
-def _cmd_attach(ns: argparse.Namespace, argv_rest: list[str]) -> int:
-    """Attach the terminal to the vllm tmux session. Ctrl-B D detaches."""
+def _cmd_console(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    """Console into the live vllm tmux session. Ctrl-B D detaches without killing vllm."""
     from vctl.vllm_manager import VllmManager
 
-    p = argparse.ArgumentParser(prog="vctl serve attach")
+    p = argparse.ArgumentParser(prog="vctl serve console")
     p.parse_args(argv_rest)
 
     rc = resolve(ns.config, profile=ns.profile)
@@ -194,11 +194,11 @@ def _cmd_attach(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     run_dir = Path.home() / ".vctl"
     vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
     try:
-        vm.attach()
+        vm.console()
     except RuntimeError as e:
         _LOG.error("%s", e)
         return 4
-    return 0  # unreachable — attach() replaces the process via execvp
+    return 0  # unreachable — console() replaces the process via execvp
 
 
 def _cmd_logs(ns: argparse.Namespace, argv_rest: list[str]) -> int:

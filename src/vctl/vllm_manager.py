@@ -400,8 +400,12 @@ class VllmManager:
             "log_path": str(self.log_path),
         }
 
-    def attach(self) -> None:
-        """os.execvp into tmux attach-session -t <name>. Does not return."""
+    def console(self) -> None:
+        """os.execvp into tmux attach-session -t <name>. Does not return.
+
+        Renamed from attach() in v0.5.1 to avoid CLI confusion with `vctl lb attach`
+        (which registers a backend with the LB pool — different operation).
+        """
         if not tmux_session_exists(self.session_name):
             raise RuntimeError(
                 f"no running session for profile {self.rc.profile_name!r} "

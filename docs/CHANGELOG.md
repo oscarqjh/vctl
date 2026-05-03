@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.5.1] - 2026-05-04
+
+### Changed
+
+- **Renamed `vctl serve attach` → `vctl serve console`.** The previous name conflicted semantically with `vctl lb attach <ep>` (which registers a backend with the LB pool — a different operation). `console` makes the intent unambiguous: open the live tmux session for the running vllm. Internal `VllmManager.attach()` method also renamed to `console()`. **BREAKING:** scripts that called `vctl serve attach` must update to `vctl serve console`. Released same-day as v0.5.0; if you upgraded already, this is the only operator-visible difference.
+
 ## [0.5.0] - 2026-05-04
 
 ### Added
