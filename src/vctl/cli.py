@@ -80,17 +80,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="pretty",
         choices=["pretty", "json"],
         help=(
-            "Log output format: 'pretty' (human-readable) or "
-            "'json' (structured, for log shippers)"
+            "Log output format: 'pretty' (human-readable) or 'json' (structured, for log shippers)"
         ),
     )
     p.add_argument(
         "--config",
         default=_CONFIG_SENTINEL,
-        help=(
-            "path to cluster.yaml "
-            "(default: $CLUSTER_CONFIG, then ~/.vctl/cluster.yaml)"
-        ),
+        help=("path to cluster.yaml (default: $CLUSTER_CONFIG, then ~/.vctl/cluster.yaml)"),
     )
     p.add_argument(
         "--profile",

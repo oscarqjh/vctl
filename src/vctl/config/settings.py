@@ -18,9 +18,7 @@ ENV_DELIM = "__"
 # Only VCTL_* env vars whose first segment matches a known field are applied.
 # This prevents test-sentinel env vars (e.g. VCTL_TEST_NO_SOCKET) from
 # polluting the document dict and causing extra="forbid" validation errors.
-_CLUSTER_TOPLEVEL: frozenset[str] = frozenset(
-    {"apiversion", "kind", "cluster", "profile", "lb"}
-)
+_CLUSTER_TOPLEVEL: frozenset[str] = frozenset({"apiversion", "kind", "cluster", "profile", "lb"})
 _PROFILE_TOPLEVEL: frozenset[str] = frozenset(
     {"apiversion", "kind", "model", "resources", "parallelism", "server", "vllm_args", "env"}
 )

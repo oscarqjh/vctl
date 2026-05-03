@@ -156,9 +156,7 @@ class LbManager:
                 # Still alive after 10s — escalate to SIGKILL.
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.kill(pid, signal.SIGKILL)
-                    _LOG.warning(
-                        "haproxy pid=%d did not exit after SIGTERM; sent SIGKILL", pid
-                    )
+                    _LOG.warning("haproxy pid=%d did not exit after SIGTERM; sent SIGKILL", pid)
             if remaining:
                 time.sleep(0.2)
 

@@ -93,9 +93,29 @@ class LbDefaults(_Strict):
 
 
 class Pool(_Strict):
-    name: str
+    name: Annotated[str, Field(min_length=1)]
     served_model: Annotated[str, Field(min_length=1)]  # D9: no empty served_model
     bind_port: _Port  # D6
+
+    @field_validator("name", mode="after")
+    @classmethod
+    def _name_not_pure_digits(cls, v: str) -> str:
+        """v0.4.3: pool names cannot be pure digits.
+
+        The CLI's `--pool` flag accepts either a pool name or a bind_port.
+        Disambiguation: if the value parses as int and matches a configured
+        bind_port, it's treated as a port; otherwise as a name. Allowing
+        purely numeric pool names would create a footgun where the same
+        `--pool 8080` could mean different things depending on what other
+        pools are configured.
+        """
+        if v.isdigit():
+            raise ValueError(
+                f"pool name {v!r} is all digits; pool names must contain at least one "
+                "non-digit character (so the CLI's --pool flag can unambiguously "
+                "distinguish names from bind_port lookups)"
+            )
+        return v
 
 
 class LbHaproxy(_Strict):

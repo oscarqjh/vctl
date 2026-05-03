@@ -73,7 +73,28 @@ def _name_for(ep: str) -> str:
     (whitespace, newline, slash, etc.). Raises ValueError on invalid input.
     """
     if not _EP_RE.fullmatch(ep):
-        raise ValueError(
-            f"invalid endpoint {ep!r}; expected IPv4:port (e.g. '10.0.0.5:8000')"
-        )
+        raise ValueError(f"invalid endpoint {ep!r}; expected IPv4:port (e.g. '10.0.0.5:8000')")
     return "b_" + ep.replace(".", "_").replace(":", "_")
+
+
+def resolve_pool_ref(lb: LbHaproxy, ref: str) -> Pool:
+    """Resolve a CLI `--pool <ref>` value to a Pool.
+
+    *ref* is either a pool name or a bind_port (digits-only). Pool names cannot
+    be pure digits (enforced by `Pool._name_not_pure_digits`), so the lookup
+    is unambiguous: if *ref* is all digits → port lookup; else → name lookup.
+
+    Raises ValueError if the ref matches no pool. Caller maps to exit 3.
+    """
+    if ref.isdigit():
+        port = int(ref)
+        match = next((p for p in lb.pools if p.bind_port == port), None)
+        if match is None:
+            available = ", ".join(f"{p.name}={p.bind_port}" for p in lb.pools)
+            raise ValueError(f"no pool with bind_port={port}; available: {available}")
+        return match
+    match = next((p for p in lb.pools if p.name == ref), None)
+    if match is None:
+        names = [p.name for p in lb.pools]
+        raise ValueError(f"unknown pool {ref!r}; available: {names}")
+    return match

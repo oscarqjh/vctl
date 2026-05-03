@@ -58,5 +58,3 @@ def test_schema_outputs_json() -> None:
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
     assert "ClusterFile" in payload or "cluster" in payload
-
-

@@ -93,11 +93,7 @@ class Reconciler:
         keep working.
         """
         rows = client.show_servers_state()
-        return {
-            row.endpoint: row
-            for row in rows
-            if not row.backend or row.backend == section
-        }
+        return {row.endpoint: row for row in rows if not row.backend or row.backend == section}
 
     # ---- read-only API ----
 

@@ -305,14 +305,10 @@ def test_reload_includes_all_pids_in_sf_args(
     assert reload_call is not None, "reload subprocess.run call with -sf must have been made"
     sf_idx = reload_call.index("-sf")
     sf_pids = reload_call[sf_idx + 1 :]
-    assert set(sf_pids) == {"100", "200", "300"}, (
-        f"all 3 pids must appear after -sf; got {sf_pids}"
-    )
+    assert set(sf_pids) == {"100", "200", "300"}, f"all 3 pids must appear after -sf; got {sf_pids}"
 
 
-def test_stop_kills_all_pids(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_stop_kills_all_pids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """F10: stop() must SIGTERM all matched haproxy PIDs."""
     import time as _time_mod
 

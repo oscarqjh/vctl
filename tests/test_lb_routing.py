@@ -143,3 +143,40 @@ def test_name_for_rejects_malformed_endpoint(bad_ep: str) -> None:
     """
     with pytest.raises(ValueError, match="invalid endpoint"):
         _name_for(bad_ep)
+
+
+# ---------------------------------------------------------------------------
+# v0.4.3: resolve_pool_ref — accepts pool name OR bind_port (digits-only)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_pool_ref_by_name() -> None:
+    from vctl.lb.routing import resolve_pool_ref
+
+    lb = _two_pool_lb()  # pools: a (8080), b (8081)
+    assert resolve_pool_ref(lb, "a").name == "a"
+    assert resolve_pool_ref(lb, "b").name == "b"
+
+
+def test_resolve_pool_ref_by_port() -> None:
+    from vctl.lb.routing import resolve_pool_ref
+
+    lb = _two_pool_lb()
+    assert resolve_pool_ref(lb, "8080").name == "a"
+    assert resolve_pool_ref(lb, "8081").name == "b"
+
+
+def test_resolve_pool_ref_unknown_name_raises() -> None:
+    from vctl.lb.routing import resolve_pool_ref
+
+    lb = _two_pool_lb()
+    with pytest.raises(ValueError, match="unknown pool 'nonexistent'"):
+        resolve_pool_ref(lb, "nonexistent")
+
+
+def test_resolve_pool_ref_unknown_port_raises() -> None:
+    from vctl.lb.routing import resolve_pool_ref
+
+    lb = _two_pool_lb()
+    with pytest.raises(ValueError, match="no pool with bind_port=9999"):
+        resolve_pool_ref(lb, "9999")

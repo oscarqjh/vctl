@@ -72,13 +72,15 @@ def test_args_emits_bare_bool_flags(tmp_path: Path, capsys: pytest.CaptureFixtur
     (tmp_path / "models" / "qwen3-9b.yaml").write_text(
         "apiVersion: vctl/v1\nkind: Profile\n"
         "model: { name: Qwen/Qwen3.5-9B }\n"
-        "resources: { num_gpus: 8, cuda_visible_devices: \"0,1,2,3,4,5,6,7\" }\n"
+        'resources: { num_gpus: 8, cuda_visible_devices: "0,1,2,3,4,5,6,7" }\n'
         "parallelism: { data_parallel: 8, tensor_parallel: 1, api_server_count: 8 }\n"
         "server: { http_port: 8000 }\n"
         "vllm_args: { enable-prefix-caching: true, enable-debug: false, reasoning-parser: qwen3 }\n"
     )
     ns = argparse.Namespace(
-        config=str(tmp_path / "cluster.yaml"), profile="qwen3-9b", log_level="info",
+        config=str(tmp_path / "cluster.yaml"),
+        profile="qwen3-9b",
+        log_level="info",
     )
     args_cmd.run(ns, [])
     out = capsys.readouterr().out
@@ -495,7 +497,6 @@ def test_lb_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 def test_lb_info_stopped(tmp_path: Path) -> None:
     """lb info shows stopped annotation when LB is not running."""
 
-
     from vctl.commands.lb import _do_info
     from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
     from vctl.lb.manager import LbManager
@@ -517,12 +518,20 @@ def test_lb_info_stopped(tmp_path: Path) -> None:
     bs = BackendState(state_dir, "10.0.0.1", pool="default")
     bs.add("10.1.2.5:8000")
 
-    with patch.object(mgr, "status", return_value={
-        "running": False, "pid": None, "pid_alive": False,
-        "admin_reachable": False, "tmux_managed": False,
-        "cfg_path": "/tmp/h.cfg", "admin_bind": "0.0.0.0:9001",
-        "is_local_host": True,
-    }):
+    with patch.object(
+        mgr,
+        "status",
+        return_value={
+            "running": False,
+            "pid": None,
+            "pid_alive": False,
+            "admin_reachable": False,
+            "tmux_managed": False,
+            "cfg_path": "/tmp/h.cfg",
+            "admin_bind": "0.0.0.0:9001",
+            "is_local_host": True,
+        },
+    ):
         rc = _do_info(mgr, bs)
     assert rc == 0
 

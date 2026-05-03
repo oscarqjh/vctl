@@ -176,8 +176,7 @@ class TestE1AdminBindAddr:
             mgr.start(force=False)
 
         admin_bind_warnings = [
-            r for r in caplog.records
-            if "level admin" in r.message and r.levelno >= logging.WARNING
+            r for r in caplog.records if "level admin" in r.message and r.levelno >= logging.WARNING
         ]
         assert not admin_bind_warnings, f"Unexpected warning: {admin_bind_warnings}"
 
