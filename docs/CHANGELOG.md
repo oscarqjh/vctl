@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.5.3] - 2026-05-04
+
+### Fixed
+
+- **`VllmManager` state files are now host-scoped.** Previous layout `~/.vctl/vllm/<profile>.{pid,log,cmd.json,host}` collided when `~/.vctl/` was on a shared filesystem shared by multiple pods (the common case in vctl's k8s-pod-fleet topology) — N pods running the same profile concurrently would all write to the same paths, last writer wins on pid/cmd, log file interleaved/corrupt. New layout: `~/.vctl/vllm/<hostname>/<profile>.{pid,log,cmd.json,host}`. Each host gets its own directory; concurrent `vctl serve` invocations on different hosts no longer collide. The cross-host guard in `stop()`/`restart()` is retained as a sanity check (path-encoded host should match the recorded marker). Existing pre-v0.5.3 state files at `~/.vctl/vllm/<profile>.*` will not be migrated automatically — operators may move them under `~/.vctl/vllm/<hostname>/` manually or simply restart vllm via the new layout (the old ones become orphaned but harmless).
+
 ## [0.5.2] - 2026-05-04
 
 ### Changed
