@@ -41,9 +41,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     # C11: pre-flight existence sweep — check ALL targets before writing anything.
     cluster_yaml = target_dir / "cluster.yaml"
     models_dir = target_dir / "models"
-    target_paths: list[Path] = [cluster_yaml] + [
-        models_dir / f"{name}.yaml" for name in requested
-    ]
+    target_paths: list[Path] = [cluster_yaml] + [models_dir / f"{name}.yaml" for name in requested]
     if not parsed.force:
         existing = [p for p in target_paths if p.exists()]
         if existing:

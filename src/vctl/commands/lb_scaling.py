@@ -12,7 +12,7 @@ from vctl.lb.errors import LbUnreachable, PoolNotFound, ReconcilerError
 from vctl.lb.manager import LbManager
 from vctl.lb.probe import probe_local_vllm, probe_vllm
 from vctl.lb.reconciler import Action, Reconciler
-from vctl.lb.routing import _name_for, pool_for_endpoint
+from vctl.lb.routing import _name_for, pool_for_endpoint, resolve_pool_ref
 from vctl.lb.runtime import RuntimeClient, _NoOpClient
 from vctl.lb.runtime import lb_admin_client as _client
 from vctl.lb.state import BackendState
@@ -130,20 +130,18 @@ def _do_remove_cli(ep: str, mgr: LbManager, bs: BackendState) -> int:
 def _resolve_pool_name(mgr: LbManager, requested: str | None) -> str:
     """Validate/default the pool name against the LB config.
 
-    - If *requested* is given and exists → return it.
-    - If *requested* is given but unknown → stderr + exit 3.
+    - If *requested* is given (name or bind_port) → resolve via routing.resolve_pool_ref.
+    - Resolution failure → stderr + exit 3.
     - If *requested* is None and there is exactly one pool → use it.
     - If *requested* is None and there are multiple pools → raise ValueError
       (the caller must specify a pool; serve.py always passes pool_name).
     """
     if requested:
-        if requested not in {p.name for p in mgr.lb.pools}:
-            print(
-                f"unknown pool {requested!r}; available: {[p.name for p in mgr.lb.pools]}",
-                file=sys.stderr,
-            )
+        try:
+            return resolve_pool_ref(mgr.lb, requested).name
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
             sys.exit(3)
-        return requested
     if len(mgr.lb.pools) == 1:
         return mgr.lb.pools[0].name
     raise ValueError("multiple pools configured; pool_name required")

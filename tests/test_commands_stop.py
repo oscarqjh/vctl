@@ -138,9 +138,7 @@ def test_stop_kills_pid_even_when_drain_fails(
     killed_pids: list[int] = []
 
     monkeypatch.setattr(lb_scaling, "_do_drain", lambda ep, m, pool_name=None: 4)  # LB down
-    monkeypatch.setattr(
-        lb_scaling, "_do_remove", lambda ep, m, bs, pool_name=None: 0
-    )
+    monkeypatch.setattr(lb_scaling, "_do_remove", lambda ep, m, bs, pool_name=None: 0)
     monkeypatch.setattr("vctl.commands.stop.detect_self_ip", lambda: self_ip)
     monkeypatch.setattr("vctl.commands.stop._find_local_vllm", lambda port: [999])
     monkeypatch.setattr("vctl.commands.stop._wait_for_idle", lambda port, timeout: None)
@@ -166,9 +164,7 @@ def test_stop_kills_pid_even_when_drain_fails(
     assert 999 in killed_pids
 
 
-def test_stop_empty_pools_just_kills(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_stop_empty_pools_just_kills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A1: when list_pools returns [] stop skips detach and only kills PIDs."""
     state_dir = tmp_path / "state"
     mgr, lb = _make_two_pool_lb(state_dir)

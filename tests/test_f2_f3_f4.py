@@ -38,9 +38,7 @@ def _lb(host: str = "10.0.0.1") -> LbHaproxy:
     )
 
 
-def _make_mgr(
-    tmp_path: Path, host: str = "10.0.0.1", tmux_name: str = "vctl-lb"
-) -> LbManager:
+def _make_mgr(tmp_path: Path, host: str = "10.0.0.1", tmux_name: str = "vctl-lb") -> LbManager:
     return LbManager(
         _lb(host),
         state_dir=tmp_path / "state",
@@ -89,9 +87,7 @@ class TestF2TmuxNameParameter:
         assert call_args[0][0] == "vctl-lb-test-abc"
 
     @patch("vctl.lb.manager.tmux_kill")
-    def test_stop_uses_custom_tmux_name(
-        self, mock_kill: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_stop_uses_custom_tmux_name(self, mock_kill: MagicMock, tmp_path: Path) -> None:
         """F2: stop() calls tmux_kill with self.tmux_name."""
         mgr = _make_mgr(tmp_path, tmux_name="vctl-lb-test-xyz")
         mgr.stop()

@@ -18,10 +18,7 @@ _TMUX_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
 def _validate_tmux_name(name: str) -> None:
     """E3: Raise ValueError if name is not a safe tmux session name."""
     if not _TMUX_NAME_RE.fullmatch(name):
-        raise ValueError(
-            f"invalid tmux session name {name!r}; "
-            "must match [A-Za-z0-9_.-]+"
-        )
+        raise ValueError(f"invalid tmux session name {name!r}; must match [A-Za-z0-9_.-]+")
 
 
 def detect_self_ip(probe_target: str = "8.8.8.8", probe_port: int = 80) -> str:
@@ -50,9 +47,7 @@ def detect_self_ip(probe_target: str = "8.8.8.8", probe_port: int = 80) -> str:
         pass
 
     # 3. Last resort
-    _LOG.warning(
-        "detect_self_ip: all probes failed; falling back to 127.0.0.1"
-    )
+    _LOG.warning("detect_self_ip: all probes failed; falling back to 127.0.0.1")
     return "127.0.0.1"
 
 

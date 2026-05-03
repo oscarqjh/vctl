@@ -108,15 +108,15 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     verb = parsed.verb
     mgr, bs, _ = _manager(ns)
     if verb == "where":
-        # C10: multi-pool support + optional --pool <name> filter.
-        pool_name = getattr(parsed, "pool", None)
-        if pool_name is not None:
-            match = next((p for p in mgr.lb.pools if p.name == pool_name), None)
-            if match is None:
-                print(
-                    f"unknown pool {pool_name!r}; available: {[p.name for p in mgr.lb.pools]}",
-                    file=sys.stderr,
-                )
+        # C10: multi-pool support + optional --pool <name|port> filter.
+        pool_ref = getattr(parsed, "pool", None)
+        if pool_ref is not None:
+            from vctl.lb.routing import resolve_pool_ref
+
+            try:
+                match = resolve_pool_ref(mgr.lb, pool_ref)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
                 return 3
             print(f"{mgr.lb.host}:{match.bind_port}")
             return 0
@@ -552,13 +552,16 @@ def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:
         except ValueError:
             pass
 
-    target_pools = [p for p in mgr.lb.pools if pool_filter is None or p.name == pool_filter]
-    if pool_filter and not target_pools:
-        print(
-            f"unknown pool {pool_filter!r}; available: {[p.name for p in mgr.lb.pools]}",
-            file=sys.stderr,
-        )
-        return 3
+    if pool_filter is not None:
+        from vctl.lb.routing import resolve_pool_ref
+
+        try:
+            target_pools = [resolve_pool_ref(mgr.lb, pool_filter)]
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 3
+    else:
+        target_pools = list(mgr.lb.pools)
 
     state_dir = mgr.state_dir if isinstance(mgr.state_dir, Path) else Path(mgr.state_dir)
     last_log = 0.0

@@ -219,3 +219,23 @@ def test_lb_no_pools_and_no_client_rejected() -> None:
     del bad["lb"]["client"]
     with pytest.raises(ValidationError, match="pools|client"):
         ClusterFile.model_validate(bad)
+
+
+def test_pool_name_pure_digits_rejected() -> None:
+    """v0.4.3: pool names cannot be pure digits.
+
+    Reserved so the CLI's --pool flag can unambiguously distinguish names
+    from bind_port lookups (digits-only → port; else → name).
+    """
+    from vctl.config.models import Pool
+
+    with pytest.raises(ValidationError, match="all digits"):
+        Pool.model_validate({"name": "8080", "served_model": "X", "bind_port": 9000})
+
+
+def test_pool_name_with_letters_or_dashes_accepted() -> None:
+    from vctl.config.models import Pool
+
+    Pool.model_validate({"name": "qwen3-5-9b", "served_model": "X", "bind_port": 8080})
+    Pool.model_validate({"name": "pool_a", "served_model": "X", "bind_port": 8080})
+    Pool.model_validate({"name": "p1", "served_model": "X", "bind_port": 8080})  # mixed digits OK

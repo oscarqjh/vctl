@@ -125,9 +125,7 @@ def _capture_info(
 # ---------------------------------------------------------------------------
 
 
-def test_info_happy_path_two_backends(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_happy_path_two_backends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: 2 live backends with scur/qcur/running/waiting."""
     mgr, bs = _make_mgr(tmp_path)
     pbs = BackendState(mgr.state_dir, "10.0.0.1", pool="default")
@@ -143,7 +141,9 @@ def test_info_happy_path_two_backends(
     }
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_running_status(),
         live_registry=registry,
         haproxy_stats=stats,
@@ -158,16 +158,19 @@ def test_info_happy_path_two_backends(
     assert "totals:" in out
 
 
-def test_info_shows_pool_header(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_shows_pool_header(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Pool header includes pool name and bind URL."""
-    mgr, bs = _make_mgr(tmp_path, pools=[
-        Pool(name="qwen3", served_model="Qwen/Qwen3-9B", bind_port=8080),
-    ])
+    mgr, bs = _make_mgr(
+        tmp_path,
+        pools=[
+            Pool(name="qwen3", served_model="Qwen/Qwen3-9B", bind_port=8080),
+        ],
+    )
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_stopped_status(),
     )
 
@@ -176,9 +179,7 @@ def test_info_shows_pool_header(
     assert "8080" in out
 
 
-def test_info_exit_always_zero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_exit_always_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """lb info always exits 0 regardless of backend health."""
     mgr, bs = _make_mgr(tmp_path)
 
@@ -194,9 +195,7 @@ def test_info_exit_always_zero(
 # ---------------------------------------------------------------------------
 
 
-def test_info_drift_untracked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_drift_untracked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Drift: state file has ep A, haproxy has A + B (B is untracked)."""
     mgr, bs = _make_mgr(tmp_path)
     pbs = BackendState(mgr.state_dir, "10.0.0.1", pool="default")
@@ -205,7 +204,9 @@ def test_info_drift_untracked(
     registry = {"pool_default": {"10.1.2.5:8000", "10.1.2.9:8000"}}  # 9 is untracked
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_running_status(),
         live_registry=registry,
     )
@@ -222,9 +223,7 @@ def test_info_drift_untracked(
 # ---------------------------------------------------------------------------
 
 
-def test_info_lb_stopped_shows_annotation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_lb_stopped_shows_annotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When LB stopped, process panel shows [LB STOPPED] and no admin calls made."""
     mgr, bs = _make_mgr(tmp_path)
     pbs = BackendState(mgr.state_dir, "10.0.0.1", pool="default")
@@ -234,7 +233,9 @@ def test_info_lb_stopped_shows_annotation(
     monkeypatch.setattr(lb_scaling, "_client", lambda m: spy_client)
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_stopped_status(),
         client=None,  # prevent _client from being called via _capture_info
     )
@@ -246,9 +247,7 @@ def test_info_lb_stopped_shows_annotation(
     spy_client.assert_not_called()
 
 
-def test_info_lb_stopped_pid_alive_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_lb_stopped_pid_alive_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Process panel shows pid_alive=false when LB stopped."""
     mgr, bs = _make_mgr(tmp_path)
 
@@ -263,16 +262,16 @@ def test_info_lb_stopped_pid_alive_false(
 # ---------------------------------------------------------------------------
 
 
-def test_info_admin_unreachable_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_admin_unreachable_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When admin socket unreachable, WARNING printed and state-file entries shown."""
     mgr, bs = _make_mgr(tmp_path)
     pbs = BackendState(mgr.state_dir, "10.0.0.1", pool="default")
     pbs.add("10.1.2.5:8000")
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_running_status(),
         client=None,  # _client returns None → admin unreachable
     )
@@ -298,7 +297,9 @@ def test_info_vllm_metrics_unreachable_shows_dash(
     registry = {"pool_default": {"10.1.2.5:8000"}}
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_running_status(),
         live_registry=registry,
         vllm_metrics={"running": None, "waiting": None},
@@ -309,9 +310,7 @@ def test_info_vllm_metrics_unreachable_shows_dash(
     assert "--" in out
 
 
-def test_info_vllm_metrics_with_values(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_vllm_metrics_with_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When vllm /metrics returns data, values appear in output."""
     mgr, bs = _make_mgr(tmp_path)
     pbs = BackendState(mgr.state_dir, "10.0.0.1", pool="default")
@@ -320,7 +319,9 @@ def test_info_vllm_metrics_with_values(
     registry = {"pool_default": {"10.1.2.5:8000"}}
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_running_status(),
         live_registry=registry,
         vllm_metrics={"running": 7, "waiting": 3},
@@ -336,9 +337,7 @@ def test_info_vllm_metrics_with_values(
 # ---------------------------------------------------------------------------
 
 
-def test_info_multi_pool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_multi_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Multi-pool: both pools shown with their endpoints."""
     pools = [
         Pool(name="a", served_model="M/A", bind_port=8080),
@@ -354,7 +353,9 @@ def test_info_multi_pool(
     }
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_running_status(),
         live_registry=registry,
     )
@@ -366,14 +367,14 @@ def test_info_multi_pool(
     assert "10.1.2.7:8000" in out
 
 
-def test_info_empty_pool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_info_empty_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Pool with no backends shows (no backends) placeholder."""
     mgr, bs = _make_mgr(tmp_path)
 
     rc, out = _capture_info(
-        mgr, bs, monkeypatch,
+        mgr,
+        bs,
+        monkeypatch,
         status=_running_status(),
         live_registry={},
     )
@@ -525,9 +526,7 @@ def test_lb_info_subprocess_exits_zero(tmp_path: Path) -> None:
     """Subprocess test: `vctl lb info` exits 0 with a minimal config."""
     (tmp_path / "cluster.yaml").write_text((FIX / "sample_cluster.yaml").read_text())
     (tmp_path / "models").mkdir()
-    (tmp_path / "models" / "qwen3-9b.yaml").write_text(
-        (FIX / "sample_profile.yaml").read_text()
-    )
+    (tmp_path / "models" / "qwen3-9b.yaml").write_text((FIX / "sample_profile.yaml").read_text())
     state = tmp_path / "state"
     state.mkdir()
     proc = subprocess.run(

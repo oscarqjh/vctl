@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.3] - 2026-05-03
+
+### Added
+
+- **`--pool` flag now accepts a bind_port in addition to a pool name.** `vctl lb wait-ready 2 --pool 8080` resolves to the pool whose `bind_port` is 8080. Same for `lb add --pool`, `lb drain --pool`, `lb where --pool`. Resolution rule: if the value parses as digits-only → port lookup; else → name lookup. New helper `vctl.lb.routing.resolve_pool_ref(lb, ref)` is the single resolution point used by every CLI consumer.
+
+### Changed (BREAKING)
+
+- **Pool names cannot be pure digits.** Schema enforces `Pool.name` rejects values matching `^\d+$`. Reserved so the unified `--pool` flag (above) can disambiguate names from ports without ambiguity. Existing configs using non-digit pool names (e.g. `default`, `qwen3-5-9b`, `pool_a`) are unaffected; mixed digit/letter names like `p1` are still allowed.
+
 ## [0.4.2] - 2026-05-03
 
 ### Changed
