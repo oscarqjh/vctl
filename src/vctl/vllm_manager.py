@@ -11,6 +11,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import httpx
 import psutil
 
 from vctl.commands.lb_scaling import _do_add
@@ -217,7 +218,69 @@ class VllmManager:
 
     def status(self) -> dict[str, object]:
         """Return tmux_alive, pid_alive, vllm_ready, lb_attached, started_at, log_size."""
-        raise NotImplementedError
+        rc = self.rc
+        port = rc.server.http_port
+
+        # 1. tmux session liveness (informational).
+        tmux_alive = tmux_session_exists(self.session_name)
+
+        # 2. Pidfile + process liveness (read-only; never clean stale state here).
+        pid: int | None = None
+        pid_alive: bool | None = False
+        cross_host = False
+
+        if self.host_path.exists():
+            stored_host = self.host_path.read_text().strip()
+            if stored_host != socket.gethostname():
+                cross_host = True
+
+        if self.pid_path.exists():
+            try:
+                pid = int(self.pid_path.read_text().strip())
+            except (ValueError, OSError):
+                pid = None
+
+            if pid is not None:
+                if cross_host:
+                    pid_alive = None  # Cannot check liveness on a different host.
+                else:
+                    try:
+                        os.kill(pid, 0)
+                        pid_alive = True
+                    except (ProcessLookupError, PermissionError):
+                        pid_alive = False
+
+        # 3. vllm HTTP readiness (1s timeout; read-only probe).
+        vllm_ready = False
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=1.0)
+            if resp.json().get("data"):
+                vllm_ready = True
+        except Exception:
+            vllm_ready = False
+
+        # 4. LB attachment — check BackendState for our endpoint.
+        self_ip = detect_self_ip()
+        ep = f"{self_ip}:{port}"
+        bs = BackendState(
+            self.state_dir, rc.lb.host, pool=pool_for_model(rc.lb, rc.model.name).name
+        )
+        lb_attached = ep in bs.list()
+
+        # 5. Log file size (bytes).
+        log_size = self.log_path.stat().st_size if self.log_path.exists() else 0
+
+        return {
+            "tmux_alive": tmux_alive,
+            "pid_alive": pid_alive,
+            "vllm_ready": vllm_ready,
+            "lb_attached": lb_attached,
+            "log_size": log_size,
+            "pid": pid,
+            "cross_host": cross_host,
+            "session_name": self.session_name,
+            "log_path": str(self.log_path),
+        }
 
     def attach(self) -> None:
         """os.execvp into tmux attach-session -t <name>. Does not return."""

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import socket
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 
@@ -188,3 +190,98 @@ def test_start_wait_for_ready_failure_cleans_up(
     assert not vm.cmd_path.exists(), "cmd.json must be cleaned up"
     assert not vm.host_path.exists(), "host file must be cleaned up"
     assert "vctl-vllm-qwen3-9b" in killed
+
+
+def test_status_all_alive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """status() returns all True fields when session, pid, http, and LB are alive."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: True)
+
+    fake_pid = os.getpid()  # use our own PID — guaranteed alive
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    # Write pid file with a live PID
+    vm.pid_path.parent.mkdir(parents=True, exist_ok=True)
+    vm.pid_path.write_text(str(fake_pid))
+
+    # Patch httpx.get to return a models response
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"data": [{"id": "m"}]}
+    monkeypatch.setattr(vm_mod.httpx, "get", lambda url, timeout=None: mock_resp)
+
+    # Patch BackendState.list to return our endpoint
+    self_ip = vm_mod.detect_self_ip()
+    ep = f"{self_ip}:{rc.server.http_port}"
+    monkeypatch.setattr(vm_mod.BackendState, "list", lambda self: [ep])
+
+    result = vm.status()
+    assert result["tmux_alive"] is True
+    assert result["pid_alive"] is True
+    assert result["vllm_ready"] is True
+    assert result["lb_attached"] is True
+
+
+def test_status_tmux_dead_pid_alive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """status() reports tmux_alive=False but pid_alive=True for an orphan process."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
+
+    fake_pid = os.getpid()
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    vm.pid_path.write_text(str(fake_pid))
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"data": []}
+    monkeypatch.setattr(vm_mod.httpx, "get", lambda url, timeout=None: mock_resp)
+    monkeypatch.setattr(vm_mod.BackendState, "list", lambda self: [])
+
+    result = vm.status()
+    assert result["tmux_alive"] is False
+    assert result["pid_alive"] is True
+
+
+def test_status_pidfile_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """status() reports pid_alive=False when pidfile does not exist."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
+    monkeypatch.setattr(vm_mod.httpx, "get", MagicMock(side_effect=httpx.ConnectError("x")))
+    monkeypatch.setattr(vm_mod.BackendState, "list", lambda self: [])
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    # pid_path does not exist
+
+    result = vm.status()
+    assert result["pid_alive"] is False
+    assert result["vllm_ready"] is False
+    assert result["lb_attached"] is False
+
+
+def test_status_cross_host_pidfile_skips_liveness_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """status() reports pid_alive=None when host marker is a different host (cross-host read)."""
+    import vctl.vllm_manager as vm_mod
+    from vctl.vllm_manager import VllmManager
+
+    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
+    monkeypatch.setattr(vm_mod.httpx, "get", MagicMock(side_effect=httpx.ConnectError("x")))
+    monkeypatch.setattr(vm_mod.BackendState, "list", lambda self: [])
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    vm.pid_path.write_text("12345")
+    vm.host_path.write_text("other-host-99")
+
+    result = vm.status()
+    # Cross-host: cannot check liveness of a PID on a different host
+    assert result.get("cross_host") is True
+    assert result["pid_alive"] is None
