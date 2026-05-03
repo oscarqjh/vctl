@@ -108,9 +108,7 @@ class RuntimeClient:
         # match the static-cfg server line — when health check marks the
         # server DOWN, kill its sessions immediately rather than letting
         # them hang on a dead backend.
-        out = self._send(
-            f"add server {backend}/{name} {ep} check on-marked-down shutdown-sessions"
-        )
+        out = self._send(f"add server {backend}/{name} {ep} check on-marked-down shutdown-sessions")
         stripped = out.strip()
         low = stripped.lower()
         if low.startswith("new server") or stripped == "":

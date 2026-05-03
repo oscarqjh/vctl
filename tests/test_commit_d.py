@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -434,12 +435,18 @@ def test_d10_kill_tree_pid_gone_before_process_call() -> None:
 
 
 # ---------------------------------------------------------------------------
-# D11 — Popen start_new_session=True
+# D11 — Popen preexec_fn=os.setpgrp
+#
+# v0.4.11: dropped start_new_session=True (calls setsid()) because it broke
+# vllm multiproc shm coordination under data_parallel + mm-processor-cache-type
+# =shm. preexec_fn=os.setpgrp gives the same SIGINT isolation (new PGID, so
+# terminal foreground-PG SIGINT doesn't double-deliver) without detaching the
+# session.
 # ---------------------------------------------------------------------------
 
 
-def test_d11_popen_has_start_new_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """serve.run() must pass start_new_session=True to Popen."""
+def test_d11_popen_uses_setpgrp_not_setsid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """serve.run() must pass preexec_fn=os.setpgrp (not start_new_session=True)."""
     import argparse
     from unittest.mock import patch as _patch
 
@@ -447,16 +454,6 @@ def test_d11_popen_has_start_new_session(tmp_path: Path, monkeypatch: pytest.Mon
     (tmp_path / "cluster.yaml").write_text((FIX / "sample_cluster.yaml").read_text())
     (tmp_path / "models").mkdir()
     (tmp_path / "models" / "qwen3-9b.yaml").write_text((FIX / "sample_profile.yaml").read_text())
-
-    captured_kwargs: dict[str, Any] = {}
-
-    def fake_popen(cmd: list[str], **kwargs: Any) -> MagicMock:
-        captured_kwargs.update(kwargs)
-        m = MagicMock()
-        m.pid = 99999
-        # Raise immediately in wait() so run() doesn't block
-        m.wait.side_effect = Exception("stop")
-        return m
 
     monkeypatch.setenv("VCTL_TEST_NO_SOCKET", "1")
     ns = argparse.Namespace(
@@ -490,8 +487,11 @@ def test_d11_popen_has_start_new_session(tmp_path: Path, monkeypatch: pytest.Mon
     popen_kwargs = mock_subprocess.Popen.call_args
     assert popen_kwargs is not None, "Popen was not called"
     kwargs = popen_kwargs.kwargs if popen_kwargs.kwargs else popen_kwargs[1]
-    assert kwargs.get("start_new_session") is True, (
-        f"start_new_session not True in Popen kwargs: {kwargs}"
+    assert kwargs.get("preexec_fn") is os.setpgrp, (
+        f"preexec_fn not os.setpgrp in Popen kwargs: {kwargs}"
+    )
+    assert "start_new_session" not in kwargs or kwargs.get("start_new_session") is False, (
+        f"start_new_session must not be True (breaks vllm shm under DP+shm-cache): {kwargs}"
     )
 
 
