@@ -193,7 +193,7 @@ def test_c6_skip_preflight_flag_is_wired(tmp_path: Path) -> None:
         mock_proc = mock_popen.return_value
         mock_proc.wait.return_value = 0
         mock_proc.pid = 99999
-        _serve.run(ns, ["--skip-preflight"])
+        _serve.run(ns, ["--foreground", "--skip-preflight"])
 
     assert call_count["n"] == 0, "--skip-preflight was set but preflight.run was still called"
 

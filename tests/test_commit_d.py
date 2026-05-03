@@ -482,7 +482,7 @@ def test_d11_popen_uses_setpgrp_not_setsid(tmp_path: Path, monkeypatch: pytest.M
         mock_subprocess.Popen.return_value = mock_proc
         mock_pool.return_value = MagicMock(name="default")
 
-        serve_mod.run(ns, ["--skip-preflight"])
+        serve_mod.run(ns, ["--foreground", "--skip-preflight"])
 
     popen_kwargs = mock_subprocess.Popen.call_args
     assert popen_kwargs is not None, "Popen was not called"
@@ -550,7 +550,7 @@ def test_d12_bool_env_serialized_lowercase(tmp_path: Path) -> None:
         _patch("vctl.commands.serve.lb_scaling._do_remove"),
     ):
         mock_pool.return_value = MagicMock(name="default")
-        serve_mod.run(ns, ["--skip-preflight"])
+        serve_mod.run(ns, ["--foreground", "--skip-preflight"])
 
     # After run(), captured_env should have lowercase boolean
     assert captured_env.get("MY_BOOL") == "true", (

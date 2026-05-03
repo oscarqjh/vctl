@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vctl"
-version = "0.4.14"
+version = "0.5.0"
 description = "Typed CLI for orchestrating a multi-pod vLLM fleet behind HAProxy."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -53,4 +53,5 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 markers = [
     "integration: requires a real haproxy binary on PATH",
+    "vllm_supervisor_integration: requires a real tmux binary and a vllm stub HTTP server",
 ]

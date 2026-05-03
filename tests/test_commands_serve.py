@@ -138,7 +138,16 @@ def test_serve_attach_then_sigint_exits_130(tmp_path: Path) -> None:
         # reparented by CI container init and cause spurious self-exits).
         "VCTL_NO_PPID_WATCHDOG": "1",
     }
-    cmd = [sys.executable, "-m", "vctl", "--log-format", "json", "serve", "--skip-preflight"]
+    cmd = [
+        sys.executable,
+        "-m",
+        "vctl",
+        "--log-format",
+        "json",
+        "serve",
+        "--foreground",
+        "--skip-preflight",
+    ]
     proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # F7: always clean up the subprocess tree on test failure / abnormal exit.
     try:
@@ -187,7 +196,16 @@ def test_serve_sigint_during_load_exits_130_no_orphans(tmp_path: Path) -> None:
         # F8: disable PPID watchdog in tests.
         "VCTL_NO_PPID_WATCHDOG": "1",
     }
-    cmd = [sys.executable, "-m", "vctl", "--log-format", "json", "serve", "--skip-preflight"]
+    cmd = [
+        sys.executable,
+        "-m",
+        "vctl",
+        "--log-format",
+        "json",
+        "serve",
+        "--foreground",
+        "--skip-preflight",
+    ]
     proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # F7: always clean up the subprocess tree on test failure / abnormal exit.
     try:
@@ -247,7 +265,16 @@ def test_serve_fails_fast_when_no_matching_pool(tmp_path: Path) -> None:
     }
     t0 = time.time()
     proc = subprocess.run(
-        [sys.executable, "-m", "vctl", "--profile", "x", "serve", "--skip-preflight"],
+        [
+            sys.executable,
+            "-m",
+            "vctl",
+            "--profile",
+            "x",
+            "serve",
+            "--foreground",
+            "--skip-preflight",
+        ],
         capture_output=True,
         text=True,
         cwd=repo,
@@ -287,6 +314,7 @@ def test_serve_auto_attaches_to_matching_pool(tmp_path: Path) -> None:
         "--profile",
         "a",
         "serve",
+        "--foreground",
         "--skip-preflight",
     ]
     proc = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -372,3 +400,127 @@ def test_resolve_ready_timeout_bad_value_uses_default(monkeypatch: pytest.Monkey
     rc.env = {"VLLM_ENGINE_READY_TIMEOUT_S": "not-a-number"}
     result = _resolve_ready_timeout(rc)
     assert result == 1800.0
+
+
+def test_serve_foreground_flag_default_false() -> None:
+    """--foreground flag defaults to False when not supplied."""
+    from vctl.commands.serve import _build_subparser
+
+    parsed = _build_subparser().parse_args([])
+    assert parsed.foreground is False
+
+
+def test_serve_foreground_flag_set() -> None:
+    """--foreground flag is True when supplied."""
+    from vctl.commands.serve import _build_subparser
+
+    parsed = _build_subparser().parse_args(["--foreground"])
+    assert parsed.foreground is True
+
+
+# ---------------------------------------------------------------------------
+# Task 10: sub-verb dispatch + detached start
+# ---------------------------------------------------------------------------
+
+
+def test_detached_start_calls_vllm_manager_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run() without --foreground instantiates VllmManager and calls start()."""
+    import argparse
+    from unittest.mock import MagicMock, patch
+
+    import vctl.commands.serve as serve_mod
+
+    # Patch resolve to return a usable rc
+    from tests.test_vllm_manager import _make_rc  # reuse helper
+
+    rc = _make_rc()
+    monkeypatch.setattr(serve_mod, "resolve", lambda *a, **kw: rc)
+    monkeypatch.setattr(serve_mod, "pool_for_model", lambda lb, model: MagicMock(name="default"))
+
+    start_called: list[bool] = []
+
+    class FakeVllmManager:
+        def __init__(self, *a: object, **kw: object) -> None:
+            pass
+
+        def start(self) -> None:
+            start_called.append(True)
+
+    with patch("vctl.vllm_manager.VllmManager", FakeVllmManager):
+        ns = argparse.Namespace(
+            config=tmp_path / "cluster.yaml", profile="qwen3-9b", log_format="json"
+        )
+        rc_code = serve_mod.run(ns, ["--skip-preflight"])
+
+    assert start_called, "VllmManager.start() must be called for detached start"
+    assert rc_code == 0
+
+
+def test_detached_start_exits_4_on_already_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run() returns 4 when VllmManager.start() raises RuntimeError (session exists)."""
+    import argparse
+    from unittest.mock import patch
+
+    import vctl.commands.serve as serve_mod
+    from tests.test_vllm_manager import _make_rc
+
+    rc = _make_rc()
+    monkeypatch.setattr(serve_mod, "resolve", lambda *a, **kw: rc)
+    monkeypatch.setattr(serve_mod, "pool_for_model", lambda lb, model: MagicMock(name="default"))
+
+    class FakeVllmManager:
+        def __init__(self, *a: object, **kw: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("already running")
+
+    with patch("vctl.vllm_manager.VllmManager", FakeVllmManager):
+        ns = argparse.Namespace(
+            config=tmp_path / "cluster.yaml", profile="qwen3-9b", log_format="json"
+        )
+        rc_code = serve_mod.run(ns, ["--skip-preflight"])
+
+    assert rc_code == 4
+
+
+def test_serve_status_subverb_dispatches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """'vctl serve status' argv_rest dispatches to _cmd_status."""
+    import argparse
+
+    import vctl.commands.serve as serve_mod
+
+    dispatched: list[str] = []
+
+    def fake_cmd_status(ns: argparse.Namespace, rest: list[str]) -> int:
+        dispatched.append("status")
+        return 0
+
+    monkeypatch.setattr(serve_mod, "_cmd_status", fake_cmd_status)
+    ns = argparse.Namespace(config=tmp_path / "cluster.yaml", profile="qwen3-9b", log_format="json")
+    rc_code = serve_mod.run(ns, ["status"])
+    assert rc_code == 0
+    assert dispatched == ["status"]
+
+
+def test_serve_stop_subverb_dispatches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """'vctl serve stop' argv_rest dispatches to _cmd_stop."""
+    import argparse
+
+    import vctl.commands.serve as serve_mod
+
+    dispatched: list[str] = []
+
+    def fake_cmd_stop(ns: argparse.Namespace, rest: list[str]) -> int:
+        dispatched.append("stop")
+        return 0
+
+    monkeypatch.setattr(serve_mod, "_cmd_stop", fake_cmd_stop)
+    ns = argparse.Namespace(config=tmp_path / "cluster.yaml", profile="qwen3-9b", log_format="json")
+    rc_code = serve_mod.run(ns, ["stop"])
+    assert rc_code == 0
+    assert dispatched == ["stop"]

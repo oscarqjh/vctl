@@ -48,12 +48,187 @@ def _build_subparser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the preflight checks (GPU, /dev/shm, venv, LB route) before serving",
     )
+    p.add_argument(
+        "--foreground",
+        action="store_true",
+        default=False,
+        help=(
+            "Run vllm as a direct child process (v0.4.x behavior). "
+            "vctl blocks until vllm exits; SSH disconnect kills vllm. "
+            "Signals trigger drain → remove → kill. "
+            "Default: detached tmux session."
+        ),
+    )
     return p
 
 
-def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
-    parsed = _build_subparser().parse_args(argv_rest)
+_SUB_VERBS = {"status", "stop", "restart", "attach", "logs"}
 
+
+def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    # Peel sub-verb FIRST — before _build_subparser().parse_args(), because
+    # the top-level serve parser does not know about sub-verbs.
+    if argv_rest and argv_rest[0] in _SUB_VERBS:
+        sub = argv_rest[0]
+        rest = argv_rest[1:]
+        return {
+            "status": _cmd_status,
+            "stop": _cmd_stop,
+            "restart": _cmd_restart,
+            "attach": _cmd_attach,
+            "logs": _cmd_logs,
+        }[sub](ns, rest)
+
+    parsed = _build_subparser().parse_args(argv_rest)
+    if parsed.foreground or os.environ.get("VCTL_SERVE_FOREGROUND"):
+        return _run_foreground(ns, parsed)
+    return _cmd_start_detached(ns, parsed)
+
+
+def _cmd_start_detached(ns: argparse.Namespace, parsed: argparse.Namespace) -> int:
+    """Default start path: detached tmux-supervised vllm."""
+    from vctl.vllm_manager import VllmManager
+
+    if not parsed.skip_preflight:
+        from vctl.commands import preflight as _preflight
+
+        pf_rc = _preflight.run(ns, [])
+        if pf_rc != 0:
+            _LOG.error("preflight checks failed (exit %d); aborting serve", pf_rc)
+            return pf_rc
+
+    rc = resolve(ns.config, profile=ns.profile)
+    state_dir = Path(rc.cluster.state_dir)
+    run_dir = Path.home() / ".vctl"
+    # Fail-fast pool routing before spawning anything.
+    pool_for_model(rc.lb, rc.model.name)  # raises SystemExit(3) on miss
+
+    vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
+    try:
+        vm.start()
+    except RuntimeError as e:
+        _LOG.error("%s", e)
+        return 4
+    return 0
+
+
+def _cmd_status(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    """Display status of the supervised vllm process for the active profile."""
+    from vctl.vllm_manager import VllmManager
+
+    p = argparse.ArgumentParser(prog="vctl serve status")
+    p.parse_args(argv_rest)  # no flags yet; fail-fast on unknown args
+
+    rc = resolve(ns.config, profile=ns.profile)
+    state_dir = Path(rc.cluster.state_dir)
+    run_dir = Path.home() / ".vctl"
+    vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
+    info = vm.status()
+
+    def _yn(v: object) -> str:
+        if v is None:
+            return "unknown"
+        return "yes" if v else "no"
+
+    print(f"profile:     {rc.profile_name}")
+    print(f"session:     {info['session_name']}")
+    print(f"tmux alive:  {_yn(info['tmux_alive'])}")
+    print(f"pid alive:   {_yn(info['pid_alive'])}")
+    print(f"vllm ready:  {_yn(info['vllm_ready'])}")
+    print(f"lb attached: {_yn(info['lb_attached'])}")
+    print(f"pid:         {info['pid'] or '—'}")
+    print(f"log size:    {info['log_size']} bytes")
+    print(f"log path:    {info['log_path']}")
+    if info.get("cross_host"):
+        print("note: state files belong to a different host; pid_alive is unknown")
+    return 0
+
+
+def _cmd_stop(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    """Drain LB, wait for idle, remove endpoint, kill vllm tmux session."""
+    from vctl.vllm_manager import VllmManager
+
+    p = argparse.ArgumentParser(prog="vctl serve stop")
+    p.parse_args(argv_rest)
+
+    rc = resolve(ns.config, profile=ns.profile)
+    state_dir = Path(rc.cluster.state_dir)
+    run_dir = Path.home() / ".vctl"
+    vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
+    try:
+        vm.stop()
+    except RuntimeError as e:
+        _LOG.error("%s", e)
+        return 4
+    return 0
+
+
+def _cmd_restart(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    """Stop vllm and start again under a fresh tmux session."""
+    p = argparse.ArgumentParser(prog="vctl serve restart")
+    p.parse_args(argv_rest)
+
+    rc = resolve(ns.config, profile=ns.profile)
+    from vctl.vllm_manager import VllmManager  # lazy
+
+    state_dir = Path(rc.cluster.state_dir)
+    run_dir = Path.home() / ".vctl"
+    vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
+    try:
+        vm.restart()
+    except RuntimeError as e:
+        _LOG.error("%s", e)
+        return 4
+    return 0
+
+
+def _cmd_attach(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    """Attach the terminal to the vllm tmux session. Ctrl-B D detaches."""
+    from vctl.vllm_manager import VllmManager
+
+    p = argparse.ArgumentParser(prog="vctl serve attach")
+    p.parse_args(argv_rest)
+
+    rc = resolve(ns.config, profile=ns.profile)
+    state_dir = Path(rc.cluster.state_dir)
+    run_dir = Path.home() / ".vctl"
+    vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
+    try:
+        vm.attach()
+    except RuntimeError as e:
+        _LOG.error("%s", e)
+        return 4
+    return 0  # unreachable — attach() replaces the process via execvp
+
+
+def _cmd_logs(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    """Print the last N lines of the vllm log, or stream with -f."""
+    from vctl.vllm_manager import VllmManager
+
+    p = argparse.ArgumentParser(prog="vctl serve logs")
+    p.add_argument(
+        "-n",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Number of lines to show (default: 50)",
+    )
+    p.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Stream new lines as they are written",
+    )
+    parsed = p.parse_args(argv_rest)
+
+    rc = resolve(ns.config, profile=ns.profile)
+    state_dir = Path(rc.cluster.state_dir)
+    run_dir = Path.home() / ".vctl"
+    vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
+    return vm.logs(n=parsed.n, follow=parsed.follow)
+
+
+def _run_foreground(ns: argparse.Namespace, parsed: argparse.Namespace) -> int:
     # C6: wire --skip-preflight.  When not skipped, run preflight checks first.
     if not parsed.skip_preflight:
         from vctl.commands import preflight as _preflight
