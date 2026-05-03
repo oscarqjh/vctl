@@ -2,10 +2,12 @@
 
 ## In Progress
 
-_(none — v0.4.1 shipped 2026-05-03)_
+_(none — v0.5.0 shipped 2026-05-04)_
 
 ## Up Next
 
+- **Phase 2: Worker reaper.** `vctl lb gc` command + optional background watcher tmux session. Auto-cleans dead-for-N-min backends from HAProxy + state file. Closes the pod-crash recovery gap surfaced in the vllm lifecycle brainstorm. Spec + plan needed.
+- **Phase 3: Rolling restart orchestration.** `vctl rolling-restart --pool <name>` — ssh-loops endpoints, drains → kills → restarts one at a time via `vctl serve restart` on each remote host. Builds on Phase 1's `VllmManager`. Spec + plan needed.
 - **Prometheus metrics endpoint** (`vctl lb metrics`).
 - **Multi-cluster support** (`~/.config/vctl/clusters/<name>.yaml` + `--cluster <name>`).
 
@@ -26,6 +28,17 @@ _(none — v0.4.1 shipped 2026-05-03)_
 - **F5** *(probably wontfix)*: emit `daemon` directive in `render.py` + redirect stdout log to a file. F1's pidfile/pgrep fallback already covers status/stop; tradeoff (lose interactive `tmux attach`) outweighs the marginal pidfile cleanliness gain.
 
 ## Completed
+
+### 2026-05-04 — v0.5.0 VllmManager (tmux-backed vllm supervisor, Phase 1 of 3)
+
+- New `src/vctl/vllm_manager.py` — `VllmManager` class mirrors `LbManager` shape. Tmux session `vctl-vllm-<profile>` owns vllm. State files `~/.vctl/vllm/<profile>.{pid,log,cmd.json,host}`.
+- `vctl serve` now runs vllm DETACHED in tmux by default; returns 0 immediately. SSH disconnect / shell hangup no longer kill vllm. Identical process-tree shape to a manual `tmux new-session -d 'vllm serve …'`.
+- New sub-verbs: `vctl serve status / stop / restart / attach / logs [-n N] [-f]`.
+- Backwards-compat `--foreground` flag (or `VCTL_SERVE_FOREGROUND=1` env) preserves v0.4.x blocking behavior.
+- Cross-host guard: `stop` and `restart` refuse to operate on state files belonging to a different host.
+- 22 unit tests + 5 integration test skeletons (`@pytest.mark.vllm_supervisor_integration`).
+- Spec: [specs/2026-05-03-vllm-supervisor-phase1-design.md](specs/2026-05-03-vllm-supervisor-phase1-design.md) — 10 acceptance tests.
+- Plan: [plans/2026-05-03-vllm-supervisor-phase1.md](plans/2026-05-03-vllm-supervisor-phase1.md) — 12 tasks.
 
 ### 2026-05-03 — v0.4.1 hardening
 
