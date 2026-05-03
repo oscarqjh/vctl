@@ -75,7 +75,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
                 errors.append(msg)
             else:
                 port = int(ep.rsplit(":", 1)[1])
-                _wait_for_idle(port, timeout=float(os.environ.get("LB_DETACH_WAIT", "30")))
+                _wait_for_idle(port, timeout=float(os.environ.get("LB_DETACH_WAIT", "600")))
             remove_rc = lb_scaling._do_remove(ep, mgr, bs, pool_name=pname)
             if remove_rc != 0:
                 msg = f"remove failed (exit {remove_rc}) for {ep} in pool {pname}"

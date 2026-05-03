@@ -132,7 +132,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
                 lb_scaling._do_drain(ep, mgr, pool_name=pool.name)
                 _wait_for_idle(
                     rc.server.http_port,
-                    timeout=float(os.environ.get("LB_DETACH_WAIT", "30")),
+                    timeout=float(os.environ.get("LB_DETACH_WAIT", "600")),
                 )
                 lb_scaling._do_remove(ep, mgr, bs, pool_name=pool.name)
             finally:
