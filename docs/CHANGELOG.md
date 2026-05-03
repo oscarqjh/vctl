@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.4.14] - 2026-05-03
+
+### Fixed
+
+- **Runtime-added backends now actually run health checks (HAProxy 3.0 quirk).** Symptom: `vctl lb info` showed every newly attached endpoint as `⚠ no` (HAProxy `status="no check"`), so HAProxy routed traffic to the backend without ever probing `/health`. Confirmed via `show stat` field 17 = `"no check"` and `show servers state` `srv_check_state=2` (paused) vs `=6` (configured + enabled) for cfg-rendered backends. Root cause: HAProxy 3.0+ creates runtime-added servers (via `add server <bk>/<srv> ... check ...` over the admin socket) with health checks **paused** by default, even when the `check` keyword is present on the add command. Cfg-loaded servers don't have this problem because they go through a different init path. Activation requires an explicit `enable health <bk>/<srv>` admin command after the add. Fix: `RuntimeClient.add_server` now also passes explicit `inter 5s fall 2 rise 2` so check parameters match the cfg-rendered server line, and `Reconciler.want_present` now sends `enable health` on a fresh socket immediately after `add_server` returns. New `RuntimeClient.enable_health` method exposed on the public API. Existing endpoints that were attached pre-v0.4.14 will keep their `no check` status until detached and re-attached.
+
 ## [0.4.13] - 2026-05-03
 
 ### Fixed

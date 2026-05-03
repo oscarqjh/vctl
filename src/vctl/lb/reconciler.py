@@ -170,6 +170,16 @@ class Reconciler:
                 raise BackendOpFailed(
                     op="add_server", ep=ep, backend=backend_section, cause=exc
                 ) from exc
+            # v0.4.14: HAProxy 3.0 starts runtime-added servers with health
+            # checks paused even when `check` is on the add. Activate now so
+            # the backend's status flips from "no check" to "UP"/"DOWN" based
+            # on real probing. Idempotent on already-active servers.
+            try:
+                self._acquire().enable_health(backend_section, _name_for(ep))
+            except RuntimeError as exc:
+                raise BackendOpFailed(
+                    op="enable_health", ep=ep, backend=backend_section, cause=exc
+                ) from exc
 
         try:
             self._acquire().set_state(backend_section, _name_for(ep), "ready")

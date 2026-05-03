@@ -108,7 +108,13 @@ class RuntimeClient:
         # match the static-cfg server line — when health check marks the
         # server DOWN, kill its sessions immediately rather than letting
         # them hang on a dead backend.
-        out = self._send(f"add server {backend}/{name} {ep} check on-marked-down shutdown-sessions")
+        # v0.4.14: include `inter 5s fall 2 rise 2` so check parameters match
+        # the cfg-rendered server line (config defaults from the `health`
+        # block don't apply to runtime-added servers automatically).
+        out = self._send(
+            f"add server {backend}/{name} {ep} "
+            "check inter 5s fall 2 rise 2 on-marked-down shutdown-sessions"
+        )
         stripped = out.strip()
         low = stripped.lower()
         if low.startswith("new server") or stripped == "":
@@ -116,6 +122,24 @@ class RuntimeClient:
         if "already exists" in low or "already present" in low:
             return "already_present"
         raise RuntimeError(f"haproxy add_server failed: {stripped}")
+
+    def enable_health(self, backend: str, name: str) -> None:
+        # v0.4.14: HAProxy 3.0 starts runtime-added servers with health checks
+        # PAUSED even when the `check` keyword is set on `add server`. Without
+        # this explicit activation, the server reports status="no check" forever
+        # and traffic is routed without health gating. Caller must invoke this
+        # on a FRESH RuntimeClient (the admin socket closes after each response
+        # in non-prompt mode — see CLAUDE.md gotcha). Empty response = success.
+        out = self._send(f"enable health {backend}/{name}")
+        stripped = out.strip()
+        if stripped:
+            # Tolerate "Operation already enabled" / "no such server" silently —
+            # the goal is "checks are running"; we don't care if they already
+            # were, and a missing server will surface elsewhere.
+            low = stripped.lower()
+            if "no such server" in low or "already" in low:
+                return
+            raise RuntimeError(f"haproxy enable_health failed: {stripped}")
 
     def remove_server(self, backend: str, name: str) -> None:
         # B7: parse response and raise on errors; tolerate "no such server".
@@ -217,6 +241,9 @@ class _NoOpClient:
 
     def add_server(self, backend: str, name: str, ep: str) -> str:
         return "new"
+
+    def enable_health(self, backend: str, name: str) -> None:
+        pass
 
     def remove_server(self, backend: str, name: str) -> None:
         pass
