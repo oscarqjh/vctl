@@ -518,19 +518,19 @@ def test_fetch_vllm_metrics_missing_metrics() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI subprocess test: lb info exits 0
+# CLI subprocess test: lb status exits 0
 # ---------------------------------------------------------------------------
 
 
-def test_lb_info_subprocess_exits_zero(tmp_path: Path) -> None:
-    """Subprocess test: `vctl lb info` exits 0 with a minimal config."""
+def test_lb_status_subprocess_exits_zero(tmp_path: Path) -> None:
+    """Subprocess test: `vctl lb status` exits 0 with a minimal config."""
     (tmp_path / "cluster.yaml").write_text((FIX / "sample_cluster.yaml").read_text())
     (tmp_path / "models").mkdir()
     (tmp_path / "models" / "qwen3-9b.yaml").write_text((FIX / "sample_profile.yaml").read_text())
     state = tmp_path / "state"
     state.mkdir()
     proc = subprocess.run(
-        [sys.executable, "-m", "vctl", "lb", "info"],
+        [sys.executable, "-m", "vctl", "lb", "status"],
         capture_output=True,
         text=True,
         cwd=tmp_path,
@@ -544,16 +544,11 @@ def test_lb_info_subprocess_exits_zero(tmp_path: Path) -> None:
     assert proc.returncode == 0
 
 
-# ---------------------------------------------------------------------------
-# Verify removed verbs are gone
-# ---------------------------------------------------------------------------
-
-
-def test_lb_status_verb_removed(tmp_path: Path) -> None:
-    """lb status verb has been removed (BREAKING in v0.2.4)."""
+def test_lb_info_verb_removed(tmp_path: Path) -> None:
+    """lb info verb has been renamed to lb status (BREAKING in v0.5.2)."""
     (tmp_path / "cluster.yaml").write_text((FIX / "sample_cluster.yaml").read_text())
     proc = subprocess.run(
-        [sys.executable, "-m", "vctl", "lb", "status"],
+        [sys.executable, "-m", "vctl", "lb", "info"],
         capture_output=True,
         text=True,
         cwd=tmp_path,
@@ -561,6 +556,11 @@ def test_lb_status_verb_removed(tmp_path: Path) -> None:
         timeout=10,
     )
     assert proc.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# Verify removed verbs are gone
+# ---------------------------------------------------------------------------
 
 
 def test_lb_stats_verb_removed(tmp_path: Path) -> None:

@@ -24,7 +24,7 @@ _LB_VERB_HELP: dict[str, str] = {
     "install": "Install haproxy (conda → source-build fallback)",
     "start": "Start haproxy in tmux session vctl-lb",
     "stop": "SIGTERM haproxy (via pidfile) + tear down tmux session",
-    "info": "Unified dashboard: process status + per-pool scur/qcur/running/waiting",
+    "status": "Unified dashboard: process state + per-pool scur/qcur/running/waiting",
     "is-host": "Exit 0 if this pod's IP == lb.host, else exit 1",
     "where": "Print lb.host:bind_port",
     "wait-ready": "Block until ≥N ready in every non-empty pool (and LB front 200)",
@@ -48,7 +48,7 @@ def _build_subparser() -> argparse.ArgumentParser:
     for verb in (
         "install",
         "stop",
-        "info",
+        "status",
         "is-host",
         "logs",
         "config",
@@ -150,7 +150,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     if verb == "stop":
         mgr.stop()
         return 0
-    if verb == "info":
+    if verb == "status":
         return _do_info(mgr, bs)
     if verb == "reload":
         mgr.reload()
