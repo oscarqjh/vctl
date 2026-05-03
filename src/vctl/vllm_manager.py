@@ -47,11 +47,18 @@ class VllmManager:
         self.rc = rc
         self.state_dir = Path(state_dir)
         self.run_dir = Path(run_dir)
-        self._vllm_dir = self.run_dir / "vllm"
+        # v0.5.3: state files are host-scoped because run_dir is on shared FS
+        # in multi-pod setups (e.g. ~/.vctl/ on /mnt). Without the hostname
+        # segment, N pods running the same profile would all write to the
+        # same pid/log/cmd files and corrupt each other's state.
+        self.hostname = socket.gethostname()
+        self._vllm_dir = self.run_dir / "vllm" / self.hostname
         self._vllm_dir.mkdir(parents=True, exist_ok=True)
         self.pid_path = self._vllm_dir / f"{rc.profile_name}.pid"
         self.log_path = self._vllm_dir / f"{rc.profile_name}.log"
         self.cmd_path = self._vllm_dir / f"{rc.profile_name}.cmd.json"
+        # Host marker kept for backwards-compat status() reporting + sanity
+        # check (path-encoded hostname should equal recorded hostname).
         self.host_path = self._vllm_dir / f"{rc.profile_name}.host"
 
     def start(self) -> None:

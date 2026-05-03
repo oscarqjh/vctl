@@ -44,12 +44,16 @@ def test_vllm_manager_init_creates_run_dir(tmp_path: Path) -> None:
 
 
 def test_vllm_manager_init_computes_state_paths(tmp_path: Path) -> None:
-    """__init__ pre-computes all four state file paths under run_dir/vllm/."""
+    """__init__ pre-computes all four state file paths under run_dir/vllm/<host>/."""
+    import socket
+
     from vctl.vllm_manager import VllmManager
 
     rc = _make_rc(profile_name="qwen3-9b")
     vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
-    vllm_dir = tmp_path / "run" / "vllm"
+    # v0.5.3: state files are host-scoped to avoid collisions when run_dir is
+    # on a shared FS shared by multiple pods.
+    vllm_dir = tmp_path / "run" / "vllm" / socket.gethostname()
     assert vm.pid_path == vllm_dir / "qwen3-9b.pid"
     assert vm.log_path == vllm_dir / "qwen3-9b.log"
     assert vm.cmd_path == vllm_dir / "qwen3-9b.cmd.json"
