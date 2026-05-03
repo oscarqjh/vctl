@@ -53,7 +53,10 @@ def _build_subparser() -> argparse.ArgumentParser:
 
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     parsed = _build_subparser().parse_args(argv_rest)
+    return _run_foreground(ns, parsed)
 
+
+def _run_foreground(ns: argparse.Namespace, parsed: argparse.Namespace) -> int:
     # C6: wire --skip-preflight.  When not skipped, run preflight checks first.
     if not parsed.skip_preflight:
         from vctl.commands import preflight as _preflight
