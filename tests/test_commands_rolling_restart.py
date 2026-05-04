@@ -92,3 +92,139 @@ def test_delete_session_idempotent(tmp_path: Path) -> None:
     # Must not raise even when file is absent
     sf.delete()
     sf.delete()  # second call also silent
+
+
+# ---------------------------------------------------------------------------
+# Task 2: _verify_ep_up
+# ---------------------------------------------------------------------------
+
+def _make_stats_returning(ep: str, status: str) -> object:
+    """Return a fake _fetch_haproxy_stats function that always returns *status* for *ep*."""
+    def _fake_stats(_cli: object) -> dict[str, dict[str, dict[str, int | str]]]:
+        return {
+            "pool_mypool": {
+                "b_10_0_0_1_8000": {"ep": ep, "status": status, "scur": 0, "qcur": 0, "lastchg": 1},
+            }
+        }
+    return _fake_stats
+
+
+def test_verify_ep_up_returns_true_immediately_when_already_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+    from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+    from vctl.lb.manager import LbManager
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        health=LbHealth(),
+        defaults=LbDefaults(),
+        pools=[Pool(name="mypool", served_model="*", bind_port=8080)],
+    )
+    mgr = LbManager(lb, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    monkeypatch.setattr(rr, "_fetch_haproxy_stats", _make_stats_returning("10.0.0.1:8000", "UP"))
+    monkeypatch.setattr(rr, "lb_admin_client", lambda m: object())
+
+    result = rr._verify_ep_up("10.0.0.1:8000", "mypool", mgr, timeout_s=5)
+    assert result is True
+
+
+def test_verify_ep_up_polls_until_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+    from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+    from vctl.lb.manager import LbManager
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        health=LbHealth(),
+        defaults=LbDefaults(),
+        pools=[Pool(name="mypool", served_model="*", bind_port=8080)],
+    )
+    mgr = LbManager(lb, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    call_count = {"n": 0}
+    def _fake_stats(_cli: object) -> dict[str, dict[str, dict[str, int | str]]]:
+        call_count["n"] += 1
+        status = "UP" if call_count["n"] >= 3 else "DOWN"
+        return {
+            "pool_mypool": {
+                "srv": {"ep": "10.0.0.1:8000", "status": status, "scur": 0, "qcur": 0, "lastchg": 0}
+            }
+        }
+
+    monkeypatch.setattr(rr, "_fetch_haproxy_stats", _fake_stats)
+    monkeypatch.setattr(rr, "lb_admin_client", lambda m: object())
+    monkeypatch.setattr(rr.time, "sleep", lambda _: None)  # type: ignore[attr-defined]
+
+    result = rr._verify_ep_up("10.0.0.1:8000", "mypool", mgr, timeout_s=30)
+    assert result is True
+    assert call_count["n"] >= 3
+
+
+def test_verify_ep_up_returns_false_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+    from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+    from vctl.lb.manager import LbManager
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        health=LbHealth(),
+        defaults=LbDefaults(),
+        pools=[Pool(name="mypool", served_model="*", bind_port=8080)],
+    )
+    mgr = LbManager(lb, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    monkeypatch.setattr(rr, "_fetch_haproxy_stats", _make_stats_returning("10.0.0.1:8000", "DOWN"))
+    monkeypatch.setattr(rr, "lb_admin_client", lambda m: object())
+    # Advance time so the deadline is always exceeded after first iteration
+    _calls = {"n": 0}
+    def _fake_monotonic() -> float:
+        _calls["n"] += 1
+        return float(_calls["n"] * 100)
+    monkeypatch.setattr(rr.time, "monotonic", _fake_monotonic)  # type: ignore[attr-defined]
+    monkeypatch.setattr(rr.time, "sleep", lambda _: None)  # type: ignore[attr-defined]
+
+    result = rr._verify_ep_up("10.0.0.1:8000", "mypool", mgr, timeout_s=1)
+    assert result is False
+
+
+def test_verify_ep_up_returns_false_on_lb_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+    from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+    from vctl.lb.manager import LbManager
+
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        health=LbHealth(),
+        defaults=LbDefaults(),
+        pools=[Pool(name="mypool", served_model="*", bind_port=8080)],
+    )
+    mgr = LbManager(lb, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    # lb_admin_client always returns None → LB unreachable
+    monkeypatch.setattr(rr, "lb_admin_client", lambda m: None)
+    _calls = {"n": 0}
+    def _fake_monotonic() -> float:
+        _calls["n"] += 1
+        return float(_calls["n"] * 100)
+    monkeypatch.setattr(rr.time, "monotonic", _fake_monotonic)  # type: ignore[attr-defined]
+    monkeypatch.setattr(rr.time, "sleep", lambda _: None)  # type: ignore[attr-defined]
+
+    result = rr._verify_ep_up("10.0.0.1:8000", "mypool", mgr, timeout_s=1)
+    assert result is False

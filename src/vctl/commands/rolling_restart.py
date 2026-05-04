@@ -7,12 +7,15 @@ import fcntl
 import json
 import os
 import subprocess  # noqa: F401  (module-level for monkeypatching in later tasks)
-import time  # noqa: F401  (module-level for monkeypatching in later tasks)
+import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from vctl.commands.lb import _fetch_haproxy_stats  # noqa: F401  (re-export for later tasks)
-from vctl.lb.runtime import lb_admin_client  # noqa: F401  (re-export for later tasks)
+from vctl.commands.lb import _fetch_haproxy_stats
+from vctl.lb.runtime import lb_admin_client
+
+if TYPE_CHECKING:
+    from vctl.lb.manager import LbManager
 
 _SESSION_DIR: Path = Path.home() / ".vctl" / "lb" / "rolling-restart"
 
@@ -75,3 +78,34 @@ class _SessionFile:
         """Remove the session file if present; no-op if absent."""
         with contextlib.suppress(FileNotFoundError):
             self._path.unlink()
+
+
+def _verify_ep_up(
+    ep: str,
+    pool_name: str,
+    mgr: LbManager,
+    timeout_s: int,
+) -> bool:
+    """Poll HAProxy stats until *ep* in pool_<pool_name> reports status starting 'UP'.
+
+    Opens a fresh lb_admin_client per iteration (HAProxy admin socket closes after
+    each response — see CLAUDE.md gotcha). Returns True on first UP hit; False if
+    deadline expires without seeing UP. A None client (LB unreachable) is treated as
+    non-fatal: we sleep and retry until the deadline.
+    """
+    deadline = time.monotonic() + timeout_s
+    pool_section = f"pool_{pool_name}"
+    while time.monotonic() < deadline:
+        cli = lb_admin_client(mgr)
+        if cli is None:
+            time.sleep(1)
+            continue
+        stats = _fetch_haproxy_stats(cli)
+        for srv_data in stats.get(pool_section, {}).values():
+            if srv_data.get("ep") == ep:
+                status = str(srv_data.get("status", ""))
+                if status.startswith("UP"):
+                    return True
+                break
+        time.sleep(1)
+    return False
