@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.7.0] - 2026-05-04
+
+### Added
+
+- **`vctl rolling-restart --pool <name>`** — sequential, halt-on-failure rolling restart of every endpoint in a pool. ssh-loops to each ep's host, runs `vctl serve restart` remotely, polls HAProxy until ep returns to `UP` before moving to next. Closes the last gap in the vllm lifecycle architecture (Phase 3 of 3).
+- **Idempotent + resumable.** Per-pool session file at `~/.vctl/lb/rolling-restart/<pool>.json`. Re-running `vctl rolling-restart --pool X` after a failure auto-resumes: verifies the failed ep is now `UP` (via HAProxy stats), then continues with `pending` eps. Use `--fresh` to force a clean start, `--status` to inspect session, `--abort` to clear it.
+- **Strict ready definition** — moves to next ep only after LB health check shows `UP` (default 60s timeout via `--ready-timeout`).
+- **Halt-on-failure** — first restart failure stops the run. Operator investigates manually then re-runs `vctl rolling-restart --pool X` (auto-resume).
+- **`--dry-run`, `--quiet`, `--ssh-user`, `--remote-vctl-path`** flags for operational flexibility.
+
 ## [0.6.0] - 2026-05-04
 
 ### Added
