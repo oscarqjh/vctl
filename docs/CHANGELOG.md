@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.5.4] - 2026-05-04
+
+### Fixed
+
+- **`vctl serve` now actually launches vllm in tmux.** v0.5.0 — v0.5.3 had a regression: the env dict (PATH-with-venv-bin, CUDA_VISIBLE_DEVICES, profile env vars) was built but **never passed to tmux**, and the argv started with bare `"vllm"` relying on PATH. The tmux server runs in its own minimal env, so the session executed `command not found: vllm`, exited within milliseconds, and `vctl serve` reported `can't find session: vctl-vllm-<profile>` followed by `vllm PID discovery timed out after 30.0s`. Fix:
+  - Use **absolute path** to vllm binary: `f"{rc.cluster.venv}/bin/vllm"` (no PATH dependency).
+  - Wrap argv with `env(1)` inline KEY=VALUE pairs: `["env", "CUDA_VISIBLE_DEVICES=0,1,...", "FOO=bar", <vllm_bin>, "serve", ...]` so env_overrides take effect inside the tmux session.
+  - `restart()`'s drift-detection `new_argv` now also uses the absolute path so it stays comparable to `cmd.json` written by `start()`.
+
 ## [0.5.3] - 2026-05-04
 
 ### Fixed
