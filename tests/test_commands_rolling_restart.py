@@ -790,3 +790,183 @@ def test_resume_continues_pending_after_failed_handling(
     assert rc == 0
     # ep3 must have been restarted as the pending ep
     assert "ep3:8000" in restarted
+
+
+# ---------------------------------------------------------------------------
+# Task 6: aux flags — --status, --abort, --dry-run, --quiet, --fresh
+# ---------------------------------------------------------------------------
+
+
+def _invoke_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    eps: list[str] | None = None,
+    pool_names: list[str] | None = None,
+) -> tuple[int, str, str]:
+    """Helper: invoke vctl.commands.rolling_restart.run() with full mocking."""
+    import contextlib
+    import io
+
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+
+    if eps is not None:
+        monkeypatch.setattr(BackendState, "list", lambda self: list(eps))
+
+    real_pools = pool_names or ["mypool"]
+
+    def _fake_resolve(config: str, profile: str | None = None) -> object:
+        from vctl.config.models import (
+            LbAdmin,
+            LbDefaults,
+            LbHaproxy,
+            LbHealth,
+            LbStats,
+            Pool,
+        )
+
+        pools = [
+            Pool(name=n, served_model="*", bind_port=8080 + i) for i, n in enumerate(real_pools)
+        ]
+        lb = LbHaproxy(
+            host="10.0.0.1",
+            admin=LbAdmin(bind_port=9001),
+            stats=LbStats(bind_port=9000),
+            health=LbHealth(),
+            defaults=LbDefaults(),
+            pools=pools,
+        )
+        return type(
+            "RC",
+            (),
+            {
+                "lb": lb,
+                "cluster": type("C", (), {"state_dir": str(tmp_path / "state")})(),
+            },
+        )()
+
+    monkeypatch.setattr(rr, "resolve", _fake_resolve)
+
+    out = io.StringIO()
+    err = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        ns = _argparse.Namespace(config="/dev/null", profile=None)
+        rc = rr.run(ns, argv)
+    return rc, out.getvalue(), err.getvalue()
+
+
+def test_status_with_no_session_prints_no_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rc, out, err = _invoke_run(tmp_path, monkeypatch, ["--pool", "mypool", "--status"])
+    assert rc == 0
+    assert "no session in progress" in out
+
+
+def test_status_with_active_session_prints_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+
+    sess_dir = tmp_path / "sessions"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    data = {
+        "pool": "mypool",
+        "in_progress": False,
+        "completed": ["ep1:8000"],
+        "failed": [],
+        "pending": [],
+    }
+    (sess_dir / "mypool.json").write_text(_json.dumps(data))
+
+    rc, out, _ = _invoke_run(tmp_path, monkeypatch, ["--pool", "mypool", "--status"])
+    assert rc == 0
+    assert "mypool" in out
+    assert "ep1:8000" in out
+
+
+def test_abort_deletes_session_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import vctl.commands.rolling_restart as rr
+
+    sess_dir = tmp_path / "sessions"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    (sess_dir / "mypool.json").write_text(_json.dumps({"pool": "mypool", "in_progress": False}))
+
+    rc, _, _ = _invoke_run(tmp_path, monkeypatch, ["--pool", "mypool", "--abort"])
+    assert rc == 0
+    assert not (sess_dir / "mypool.json").exists()
+
+
+def test_abort_with_no_session_returns_0_silently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rc, _, err = _invoke_run(tmp_path, monkeypatch, ["--pool", "mypool", "--abort"])
+    assert rc == 0
+    assert "no session file" in err
+
+
+def test_fresh_deletes_existing_session_then_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+
+    # Existing partial session (completed only ep1, ep2 pending)
+    old_data = {
+        "pool": "mypool",
+        "in_progress": False,
+        "completed": ["ep1:8000"],
+        "failed": [],
+        "pending": ["ep2:8000"],
+    }
+    (sess_dir / "mypool.json").write_text(_json.dumps(old_data))
+
+    all_eps = ["ep1:8000", "ep2:8000", "ep3:8000"]
+    monkeypatch.setattr(BackendState, "list", lambda self: list(all_eps))
+    restarted: list[str] = []
+
+    def _fake_restart(ep: str, **kwargs: object) -> str:
+        restarted.append(ep)
+        return "ok"
+
+    monkeypatch.setattr(rr, "_restart_one_ep", _fake_restart)
+
+    def _fake_resolve(config: str, profile: str | None = None) -> object:
+        from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+
+        lb = LbHaproxy(
+            host="10.0.0.1",
+            admin=LbAdmin(bind_port=9001),
+            stats=LbStats(bind_port=9000),
+            health=LbHealth(),
+            defaults=LbDefaults(),
+            pools=[Pool(name="mypool", served_model="*", bind_port=8080)],
+        )
+        return type(
+            "RC",
+            (),
+            {
+                "lb": lb,
+                "cluster": type("C", (), {"state_dir": str(tmp_path / "state")})(),
+            },
+        )()
+
+    monkeypatch.setattr(rr, "resolve", _fake_resolve)
+
+    ns = _argparse.Namespace(config="/dev/null", profile=None)
+    rc = rr.run(ns, ["--pool", "mypool", "--fresh"])
+    assert rc == 0
+    # All 3 eps must be restarted (fresh start from scratch)
+    assert restarted == all_eps
+    # Session file deleted on success
+    assert not (sess_dir / "mypool.json").exists()

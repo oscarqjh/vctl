@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from vctl.commands.lb import _fetch_haproxy_stats
 from vctl.lb.runtime import lb_admin_client
 from vctl.lb.state import BackendState
+from vctl.resolver import resolve
 
 if TYPE_CHECKING:
     from vctl.lb.manager import LbManager
@@ -595,7 +596,6 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
 
     # Resolve LbManager from cluster config.
     from vctl.lb.manager import LbManager
-    from vctl.resolver import resolve
 
     rc = resolve(ns.config, profile=ns.profile)
     state_dir = Path(rc.cluster.state_dir)
