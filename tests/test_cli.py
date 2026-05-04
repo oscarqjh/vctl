@@ -151,3 +151,21 @@ def test_help_text_presence(args: list[str], expected_substrings: Sequence[str])
     out = proc.stdout + proc.stderr
     for s in expected_substrings:
         assert s in out, f"{s!r} missing from `vctl {' '.join(args)}` output"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — rolling-restart dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_rolling_restart_command_dispatches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """'vctl rolling-restart' must be found in _COMMANDS and dispatch without ImportError."""
+    import importlib
+
+    from vctl.cli import _COMMANDS
+
+    assert "rolling-restart" in _COMMANDS, "'rolling-restart' missing from _COMMANDS in cli.py"
+
+    # Verify the module is importable (no syntax / import errors).
+    mod = importlib.import_module(_COMMANDS["rolling-restart"])
+    assert callable(getattr(mod, "run", None)), "rolling_restart.run must be callable"

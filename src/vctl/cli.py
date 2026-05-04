@@ -24,6 +24,7 @@ _COMMANDS: dict[str, str] = {
     "lb": "vctl.commands.lb",
     "config": "vctl.commands.config_cmd",
     "init-config": "vctl.commands.init_config",
+    "rolling-restart": "vctl.commands.rolling_restart",  # Phase 3
 }
 
 _PROFILE_AWARE = {"info", "serve", "args", "preflight", "stop"}
