@@ -190,6 +190,7 @@ Sequential, halt-on-failure rolling restart of every endpoint in a named pool. F
 |---|---|
 | 0 | All endpoints restarted and verified UP. Session file deleted. |
 | 1 | Restart or health-check failure on an endpoint, or operator aborted resume. Session file preserved. |
+| 2 | Corrupt session file (invalid JSON). Run `vctl rolling-restart --pool NAME --abort` to clear it. |
 | 3 | Unknown pool name. |
 | 4 | Rolling restart already in progress for this pool (`in_progress: true` in session file). Use `--abort` to clear it. |
 

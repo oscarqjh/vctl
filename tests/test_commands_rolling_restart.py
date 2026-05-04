@@ -568,6 +568,15 @@ def _write_session(path: Path, data: dict[str, object]) -> None:
     path.write_text(_json.dumps(data))
 
 
+def _fake_stdin(choice: str) -> object:
+    """Return a fake stdin that returns *choice* from read() and True from isatty()."""
+    return type(
+        "FakeStdin",
+        (),
+        {"read": lambda s, n: choice, "isatty": lambda s: True},
+    )()
+
+
 def test_resume_verifies_failed_ep_now_up_marks_completed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -645,7 +654,7 @@ def test_resume_failed_ep_still_down_skip_choice(
     # ep1 is still DOWN
     monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, m, timeout_s: False)
     # Operator chooses "a" (skip)
-    monkeypatch.setattr(rr.sys, "stdin", type("FakeStdin", (), {"read": lambda s, n: "a"})())
+    monkeypatch.setattr(rr.sys, "stdin", _fake_stdin("a"))
     monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000"])
 
     sf = rr._SessionFile.__new__(rr._SessionFile)
@@ -690,7 +699,7 @@ def test_resume_failed_ep_still_down_retry_choice(
     # ep1 is DOWN in initial probe → prompt → operator retries → _restart_one_ep called
     monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, m, timeout_s: False)
     monkeypatch.setattr(rr, "_restart_one_ep", _fake_restart)
-    monkeypatch.setattr(rr.sys, "stdin", type("FakeStdin", (), {"read": lambda s, n: "b"})())
+    monkeypatch.setattr(rr.sys, "stdin", _fake_stdin("b"))
     monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000"])
 
     sf = rr._SessionFile.__new__(rr._SessionFile)
@@ -728,7 +737,7 @@ def test_resume_failed_ep_still_down_abort_choice(
 
     monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, m, timeout_s: False)
     monkeypatch.setattr(rr, "_restart_one_ep", lambda ep, **kwargs: "ok")
-    monkeypatch.setattr(rr.sys, "stdin", type("FakeStdin", (), {"read": lambda s, n: "c"})())
+    monkeypatch.setattr(rr.sys, "stdin", _fake_stdin("c"))
     monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000", "ep2:8000"])
 
     sf = rr._SessionFile.__new__(rr._SessionFile)
@@ -778,7 +787,7 @@ def test_resume_continues_pending_after_failed_handling(
     # ep2 still DOWN → skip
     monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, m, timeout_s: False)
     monkeypatch.setattr(rr, "_restart_one_ep", _fake_restart)
-    monkeypatch.setattr(rr.sys, "stdin", type("FakeStdin", (), {"read": lambda s, n: "a"})())
+    monkeypatch.setattr(rr.sys, "stdin", _fake_stdin("a"))
     monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000", "ep2:8000", "ep3:8000"])
 
     sf = rr._SessionFile.__new__(rr._SessionFile)
@@ -970,3 +979,86 @@ def test_fresh_deletes_existing_session_then_runs(
     assert restarted == all_eps
     # Session file deleted on success
     assert not (sess_dir / "mypool.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: corrupt session JSON → exit 2
+# ---------------------------------------------------------------------------
+
+
+def test_corrupt_session_json_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Corrupt session JSON must exit 2 (config error), not 1 (halt-on-failure)."""
+    import vctl.commands.rolling_restart as rr
+
+    sess_dir = tmp_path / "sessions"
+    sess_dir.mkdir(parents=True)
+    (sess_dir / "mypool.json").write_text("not json{")
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+
+    def _fake_resolve(config: str, profile: str | None = None) -> object:
+        from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+
+        lb = LbHaproxy(
+            host="10.0.0.1",
+            admin=LbAdmin(bind_port=9001),
+            stats=LbStats(bind_port=9000),
+            health=LbHealth(),
+            defaults=LbDefaults(),
+            pools=[Pool(name="mypool", served_model="*", bind_port=8080)],
+        )
+        return type(
+            "RC",
+            (),
+            {
+                "lb": lb,
+                "cluster": type("C", (), {"state_dir": str(tmp_path / "state")})(),
+            },
+        )()
+
+    monkeypatch.setattr(rr, "resolve", _fake_resolve)
+
+    ns = _argparse.Namespace(config="/dev/null", profile=None)
+    rc = rr.run(ns, ["--pool", "mypool"])
+    assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# Fix 5: --remote-vctl-path argv test
+# ---------------------------------------------------------------------------
+
+
+def test_restart_one_ep_remote_vctl_path_in_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--remote-vctl-path puts the path directly in ssh argv, not wrapped in bash -lc."""
+    import vctl.commands.rolling_restart as rr
+
+    ssh_calls: list[list[str]] = []
+
+    def _fake_run(argv: list[str], **kwargs: object) -> object:
+        ssh_calls.append(argv)
+        return _subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(rr.subprocess, "run", _fake_run)
+    monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, mgr, timeout_s: True)
+
+    mgr = _make_mgr_for_restart(tmp_path)
+    result = rr._restart_one_ep(
+        ep="10.0.0.2:8000",
+        idx=1,
+        total=1,
+        pool_name="mypool",
+        mgr=mgr,
+        ssh_user="",
+        vllm_timeout=600,
+        ready_timeout=60,
+        dry_run=False,
+        quiet=True,
+        remote_vctl_path="/opt/vctl/bin/vctl",
+    )
+    assert result == "ok"
+    assert len(ssh_calls) == 1
+    argv = ssh_calls[0]
+    # The remote command must be the explicit path, not wrapped in bash -lc
+    assert "/opt/vctl/bin/vctl serve restart" in argv
+    assert not any("bash -lc" in a for a in argv)

@@ -8,7 +8,7 @@ import datetime
 import fcntl
 import json
 import os
-import subprocess  # noqa: F401  (module-level for monkeypatching in later tasks)
+import subprocess  # noqa: F401  (module-level for monkeypatching in tests)
 import sys
 import time
 from pathlib import Path
@@ -306,8 +306,11 @@ def _run_fresh(parsed: argparse.Namespace, mgr: LbManager) -> int:
         try:
             data = sf.read()
         except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
+            print(
+                f"{exc}  Run `vctl rolling-restart --pool {pool_name} --abort` to clear.",
+                file=sys.stderr,
+            )
+            return 2
         if data is not None and data.get("in_progress"):
             print(
                 f"rolling-restart already in progress for pool {pool_name!r} "
@@ -488,7 +491,11 @@ def _run_resume(
                     f"  (c) abort — exit now (session file preserved)\n",
                     file=sys.stderr,
                 )
-                choice = sys.stdin.read(1).strip().lower()
+                if not sys.stdin.isatty():
+                    print("  no TTY — defaulting to skip", file=sys.stderr)
+                    choice = "a"
+                else:
+                    choice = sys.stdin.read(1).strip().lower()
                 if choice == "a":
                     failed.remove(ep)
                     completed.append(ep)
@@ -635,9 +642,12 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     try:
         existing = sf.read()
     except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        print(
+            f"{exc}  Run `vctl rolling-restart --pool {pool_name} --abort` to clear.",
+            file=sys.stderr,
+        )
+        return 2
 
-    if existing is not None and not parsed.dry_run:
+    if existing is not None:
         return _run_resume(parsed, mgr, sf, existing)
     return _run_fresh(parsed, mgr)
