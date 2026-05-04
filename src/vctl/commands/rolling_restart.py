@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
+import datetime
 import fcntl
 import json
 import os
@@ -14,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from vctl.commands.lb import _fetch_haproxy_stats
 from vctl.lb.runtime import lb_admin_client
+from vctl.lb.state import BackendState
 
 if TYPE_CHECKING:
     from vctl.lb.manager import LbManager
@@ -196,3 +199,267 @@ def _restart_one_ep(
     if not quiet:
         print(f"{prefix}  ready ({elapsed}s)", file=sys.stderr)
     return "ok"
+
+
+def _build_subparser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="vctl rolling-restart",
+        description=(
+            "Sequential, halt-on-failure rolling restart of every endpoint in a pool.\n"
+            "ssh-es to each worker, runs `vctl serve restart`, waits until HAProxy "
+            "reports UP before moving to the next.\n"
+            "\n"
+            "State is persisted to ~/.vctl/lb/rolling-restart/<pool>.json so an "
+            "interrupted run can be auto-resumed by re-running the same command."
+        ),
+    )
+    p.add_argument("--pool", required=True, metavar="NAME", help="Target pool name (required).")
+    mx = p.add_mutually_exclusive_group()
+    mx.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Delete existing session file before starting; force fresh run from all eps.",
+    )
+    mx.add_argument(
+        "--status",
+        action="store_true",
+        help="Print session file contents (or 'no session in progress'); exit 0.",
+    )
+    mx.add_argument(
+        "--abort",
+        action="store_true",
+        help="Delete session file if present; exit 0.",
+    )
+    mx.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Print what would happen without ssh-ing; session file not written or deleted.",
+    )
+    p.add_argument(
+        "--ready-timeout",
+        type=int,
+        default=60,
+        dest="ready_timeout",
+        metavar="SECONDS",
+        help="Seconds to wait for HAProxy UP after ssh returns 0 (default: 60).",
+    )
+    p.add_argument(
+        "--vllm-timeout",
+        type=int,
+        default=600,
+        dest="vllm_timeout",
+        metavar="SECONDS",
+        help="Seconds vctl serve restart is allowed to take on the remote (default: 600).",
+    )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress per-ep progress lines; print only final summary.",
+    )
+    p.add_argument(
+        "--ssh-user",
+        default="",
+        dest="ssh_user",
+        metavar="USER",
+        help="Override ssh username (default: use ssh config / key).",
+    )
+    p.add_argument(
+        "--remote-vctl-path",
+        default=None,
+        dest="remote_vctl_path",
+        metavar="PATH",
+        help=(
+            "Override remote vctl path (default: bash -lc 'vctl serve restart'). "
+            "Use for non-standard installs e.g. /opt/vctl/bin/vctl."
+        ),
+    )
+    return p
+
+
+def _run_fresh(parsed: argparse.Namespace, mgr: LbManager) -> int:
+    """Execute a fresh rolling restart from all eps in the pool."""
+    pool_name: str = parsed.pool
+    dry_run: bool = getattr(parsed, "dry_run", False)
+    quiet: bool = getattr(parsed, "quiet", False)
+    ssh_user: str = getattr(parsed, "ssh_user", "")
+    vllm_timeout: int = getattr(parsed, "vllm_timeout", 600)
+    ready_timeout: int = getattr(parsed, "ready_timeout", 60)
+    remote_vctl_path: str | None = getattr(parsed, "remote_vctl_path", None)
+
+    # Validate pool exists in config.
+    configured = {p.name for p in mgr.lb.pools}
+    if pool_name not in configured:
+        available = ", ".join(sorted(configured))
+        print(
+            f"unknown pool: {pool_name!r}; available: {available}",
+            file=sys.stderr,
+        )
+        return 3
+
+    sf = _SessionFile(pool_name)
+
+    # Concurrency guard: refuse if another invocation is already in_progress.
+    # Checked before backend enumeration so the guard fires even with empty backends.
+    if sf.exists() and not dry_run:
+        try:
+            data = sf.read()
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if data is not None and data.get("in_progress"):
+            print(
+                f"rolling-restart already in progress for pool {pool_name!r} "
+                "— kill the other invocation or use --abort",
+                file=sys.stderr,
+            )
+            return 4
+
+    # Enumerate endpoints from state file.
+    pbs = BackendState(mgr.state_dir, mgr.lb.host, pool=pool_name)
+    eps = sorted(pbs.list())
+    if not eps:
+        print(
+            f"pool {pool_name!r} has no registered backends; nothing to restart",
+            file=sys.stderr,
+        )
+        return 0
+
+    # Build initial session.
+    now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    session: dict[str, Any] = {
+        "pool": pool_name,
+        "started_at": now_utc,
+        "completed": [],
+        "failed": [],
+        "pending": list(eps),
+        "in_progress": True,
+    }
+    if not dry_run:
+        sf.write(session)
+
+    completed: list[str] = []
+    failed: list[str] = []
+    pending = list(eps)
+
+    for idx, ep in enumerate(eps, start=1):
+        outcome = _restart_one_ep(
+            ep=ep,
+            idx=idx,
+            total=len(eps),
+            pool_name=pool_name,
+            mgr=mgr,
+            ssh_user=ssh_user,
+            vllm_timeout=vllm_timeout,
+            ready_timeout=ready_timeout,
+            dry_run=dry_run,
+            quiet=quiet,
+            remote_vctl_path=remote_vctl_path,
+        )
+        pending = [e for e in pending if e != ep]
+        if outcome == "ok":
+            completed.append(ep)
+            if not dry_run:
+                sf.write(
+                    {
+                        "pool": pool_name,
+                        "started_at": now_utc,
+                        "completed": completed,
+                        "failed": [],
+                        "pending": pending,
+                        "in_progress": True,
+                    }
+                )
+        else:
+            failed.append(ep)
+            if not dry_run:
+                sf.write(
+                    {
+                        "pool": pool_name,
+                        "started_at": now_utc,
+                        "completed": completed,
+                        "failed": failed,
+                        "pending": pending,
+                        "in_progress": False,
+                    }
+                )
+            print(
+                f"HALTING after failure on {ep}. "
+                f"Fix the ep then re-run `vctl rolling-restart --pool {pool_name}` to resume.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Full success.
+    if not dry_run:
+        sf.delete()
+    print(
+        f"rolling-restart complete: {len(completed)} ep(s) restarted in pool {pool_name!r}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _run_resume(
+    parsed: argparse.Namespace,
+    mgr: LbManager,
+    sf: _SessionFile,
+    session: dict[str, Any],
+) -> int:
+    """Resume an interrupted rolling restart. Implemented in Task 5."""
+    # Placeholder — Task 5 will fill this in.
+    return _run_fresh(parsed, mgr)
+
+
+def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
+    """Entry point dispatched by cli._dispatch."""
+    parsed = _build_subparser().parse_args(argv_rest)
+
+    # Resolve LbManager from cluster config.
+    from vctl.lb.manager import LbManager
+    from vctl.resolver import resolve
+
+    rc = resolve(ns.config, profile=ns.profile)
+    state_dir = Path(rc.cluster.state_dir)
+    run_dir = Path.home() / ".vctl" / "lb"
+    mgr = LbManager(rc.lb, state_dir=state_dir, run_dir=run_dir)
+
+    pool_name: str = parsed.pool
+    sf = _SessionFile(pool_name)
+
+    # --status: print and exit.
+    if parsed.status:
+        if sf.exists():
+            try:
+                data = sf.read()
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"no session in progress for pool {pool_name!r}")
+        return 0
+
+    # --abort: delete and exit.
+    if parsed.abort:
+        if sf.exists():
+            sf.delete()
+            print(f"session file for pool {pool_name!r} deleted.", file=sys.stderr)
+        else:
+            print(f"no session file for pool {pool_name!r}", file=sys.stderr)
+        return 0
+
+    # --fresh: delete existing session before starting.
+    if parsed.fresh:
+        sf.delete()
+
+    # Dispatch: resume if session present, fresh otherwise.
+    try:
+        existing = sf.read()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if existing is not None and not parsed.dry_run:
+        return _run_resume(parsed, mgr, sf, existing)
+    return _run_fresh(parsed, mgr)

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import json
+import argparse as _argparse
+import json as _json
 import subprocess as _subprocess
 from pathlib import Path
 
@@ -57,7 +58,7 @@ def test_load_session_reads_existing_file(tmp_path: Path) -> None:
 
     data = {"pool": "p", "completed": [], "failed": [], "pending": ["ep1"], "in_progress": True}
     path = tmp_path / "p.json"
-    path.write_text(json.dumps(data))
+    path.write_text(_json.dumps(data))
     sf = rr._SessionFile.__new__(rr._SessionFile)
     sf._path = path
     sf._lock_path = tmp_path / "p.lock"
@@ -73,7 +74,7 @@ def test_write_session_atomic(tmp_path: Path) -> None:
     sf._lock_path = tmp_path / "p.lock"
     data = {"pool": "p", "in_progress": True}
     sf.write(data)
-    assert json.loads(sf._path.read_text()) == data
+    assert _json.loads(sf._path.read_text()) == data
     assert not (tmp_path / "p.json.tmp").exists()
 
 
@@ -86,7 +87,7 @@ def test_write_session_overwrites_existing(tmp_path: Path) -> None:
     sf._lock_path = tmp_path / "p.lock"
     sf.write({"pool": "p", "in_progress": True})
     sf.write({"pool": "p", "in_progress": False, "extra": "new"})
-    loaded = json.loads(sf._path.read_text())
+    loaded = _json.loads(sf._path.read_text())
     assert loaded["in_progress"] is False
     assert loaded.get("extra") == "new"
 
@@ -415,3 +416,143 @@ def test_restart_one_ep_full_success_returns_ok(
     assert "ssh" in argv[0]
     assert "admin@10.0.0.2" in argv
     assert any("bash -lc" in a or "vctl serve restart" in a for a in argv)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: _run_fresh + run() argparse
+# ---------------------------------------------------------------------------
+
+
+def _make_ns(config: str = "/dev/null", profile: str | None = None) -> _argparse.Namespace:
+    return _argparse.Namespace(config=config, profile=profile)
+
+
+def _make_full_mgr(tmp_path: Path, pool_names: list[str] | None = None) -> object:
+    from vctl.config.models import LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool
+    from vctl.lb.manager import LbManager
+
+    if pool_names is None:
+        pool_names = ["mypool"]
+    pools = [Pool(name=n, served_model="*", bind_port=8080 + i) for i, n in enumerate(pool_names)]
+    lb = LbHaproxy(
+        host="10.0.0.1",
+        admin=LbAdmin(bind_port=9001),
+        stats=LbStats(bind_port=9000),
+        health=LbHealth(),
+        defaults=LbDefaults(),
+        pools=pools,
+    )
+    return LbManager(lb, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+
+def test_fresh_run_unknown_pool_returns_3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import vctl.commands.rolling_restart as rr
+
+    monkeypatch.setattr(rr, "_SESSION_DIR", tmp_path / "sessions")
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    # Parse args manually (no config resolution needed)
+    parsed = rr._build_subparser().parse_args(["--pool", "nonexistent"])
+    rc = rr._run_fresh(parsed, mgr)
+    assert rc == 3
+
+
+def test_fresh_run_empty_pool_returns_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    monkeypatch.setattr(rr, "_SESSION_DIR", tmp_path / "sessions")
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+    # Patch BackendState.list to return empty
+    monkeypatch.setattr(BackendState, "list", lambda self: [])
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    rc = rr._run_fresh(parsed, mgr)
+    assert rc == 0
+    out = capsys.readouterr()
+    assert "nothing to restart" in out.err or "no registered backends" in out.err.lower()
+
+
+def test_fresh_run_concurrency_guard_returns_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    # Write a session file with in_progress=True to simulate a concurrent run
+    session_file = sess_dir / "mypool.json"
+    session_file.write_text(
+        _json.dumps(
+            {"pool": "mypool", "in_progress": True, "completed": [], "failed": [], "pending": []}
+        )
+    )
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    rc = rr._run_fresh(parsed, mgr)
+    assert rc == 4
+
+
+def test_fresh_run_full_success_deletes_session_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    eps = ["10.0.0.1:8000", "10.0.0.2:8000"]
+    monkeypatch.setattr(BackendState, "list", lambda self: list(eps))
+
+    # _restart_one_ep always succeeds
+    def _always_ok(ep: str, **kwargs: object) -> str:
+        return "ok"
+
+    monkeypatch.setattr(rr, "_restart_one_ep", _always_ok)
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    rc = rr._run_fresh(parsed, mgr)
+    assert rc == 0
+    # Session file must be deleted after full success
+    assert not (sess_dir / "mypool.json").exists()
+
+
+def test_fresh_run_halt_on_failure_persists_session_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    eps = ["ep1:8000", "ep2:8000", "ep3:8000"]
+    monkeypatch.setattr(BackendState, "list", lambda self: list(eps))
+
+    call_count = {"n": 0}
+
+    def _fake_restart(ep: str, **kwargs: object) -> str:
+        call_count["n"] += 1
+        return "failed" if ep == "ep2:8000" else "ok"
+
+    monkeypatch.setattr(rr, "_restart_one_ep", _fake_restart)
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    rc = rr._run_fresh(parsed, mgr)
+    assert rc == 1
+
+    # Session file must persist with correct state
+    session_path = sess_dir / "mypool.json"
+    assert session_path.exists()
+    data = _json.loads(session_path.read_text())
+    assert "ep1:8000" in data["completed"]
+    assert "ep2:8000" in data["failed"]
+    assert "ep3:8000" in data["pending"]
+    assert data["in_progress"] is False
