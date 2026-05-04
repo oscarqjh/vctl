@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.5.6] - 2026-05-04
+
+### Fixed
+
+- **`PATH` now includes venv bin in tmux session.** v0.5.4 fixed `vllm` lookup via absolute path but didn't propagate `PATH` for vllm's OWN runtime subprocess spawns (`ninja` for FlashInfer JIT, `nvcc`, etc.). Result: vllm boot succeeded, but workers crashed mid-warmup with `[Errno 2] No such file or directory: 'ninja'` and the engine cores cascaded down. Fix: prepend `<venv>/bin` to `PATH` in `env_overrides`, so any tool vllm shells out to is reachable inside the tmux session.
+
 ## [0.5.5] - 2026-05-04
 
 ### Added

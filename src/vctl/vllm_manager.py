@@ -102,8 +102,17 @@ class VllmManager:
         # found` (the v0.5.0/0.5.3 supervisor regression).
         vllm_bin = str(Path(rc.cluster.venv) / "bin" / "vllm")
 
-        # Env overrides that vllm needs (CUDA_VISIBLE_DEVICES + profile env).
+        # Env overrides that vllm needs.
+        # PATH MUST include the venv bin because vllm spawns build tools at
+        # runtime (ninja for FlashInfer JIT, nvcc, etc.) via subprocess. Without
+        # this, the worker errors with "[Errno 2] No such file or directory:
+        # 'ninja'" the moment the model warmup hits a JIT-compile path. The
+        # tmux session otherwise inherits only the tmux server's minimal PATH.
         env_overrides: dict[str, str] = {}
+        venv_bin = str(Path(rc.cluster.venv) / "bin")
+        env_overrides["PATH"] = f"{venv_bin}:" + os.environ.get(
+            "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        )
         if rc.resources.cuda_visible_devices:
             env_overrides["CUDA_VISIBLE_DEVICES"] = rc.resources.cuda_visible_devices
         for k, v in rc.env.items():
