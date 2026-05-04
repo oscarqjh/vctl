@@ -29,11 +29,10 @@ def _build_subparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vctl serve",
         description=(
-            "Spawn a vllm inference server, wait for readiness, attach to the LB pool,\n"
-            "then wait for the subprocess to exit.  On SIGINT/SIGTERM/SIGHUP the backend\n"
-            "is drained and removed from the pool before the process tree is killed.\n"
+            "Spawn a vllm inference server in a detached tmux session, attach to LB pool,\n"
+            "and return immediately. The vllm process survives SSH disconnect.\n"
             "\n"
-            "Signal handling:\n"
+            "Signal handling (--foreground mode only):\n"
             "  SIGINT / SIGTERM / SIGHUP — graceful drain → detach → kill subprocess tree\n"
             "\n"
             "Relevant env vars:\n"
@@ -42,6 +41,17 @@ def _build_subparser() -> argparse.ArgumentParser:
             "  LB_DETACH_WAIT          — seconds to wait for in-flight requests to drain\n"
             "  VCTL_KILL_GRACE         — SIGTERM→SIGKILL grace period in seconds\n"
         ),
+        epilog=(
+            "Sub-commands (run `vctl serve <verb> --help` for details):\n"
+            "  status     Show tmux/pid/lb-attached state for the active profile\n"
+            "  stop       Drain LB → wait idle → remove → kill vllm tree\n"
+            "  restart    Stop + start in-place (preserves profile)\n"
+            "  console    Attach terminal to live vllm tmux session (Ctrl-B D detaches)\n"
+            "  logs       Tail or follow the vllm log file\n"
+            "\n"
+            "Flags below apply to the default `vctl serve` (start) path only."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
         "--skip-preflight",
@@ -116,7 +126,13 @@ def _cmd_status(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     """Display status of the supervised vllm process for the active profile."""
     from vctl.vllm_manager import VllmManager
 
-    p = argparse.ArgumentParser(prog="vctl serve status")
+    p = argparse.ArgumentParser(
+        prog="vctl serve status",
+        description=(
+            "Show tmux session, pid liveness, vllm readiness, LB-attached state, "
+            "and log size for the active profile."
+        ),
+    )
     p.parse_args(argv_rest)  # no flags yet; fail-fast on unknown args
 
     rc = resolve(ns.config, profile=ns.profile)
@@ -148,7 +164,14 @@ def _cmd_stop(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     """Drain LB, wait for idle, remove endpoint, kill vllm tmux session."""
     from vctl.vllm_manager import VllmManager
 
-    p = argparse.ArgumentParser(prog="vctl serve stop")
+    p = argparse.ArgumentParser(
+        prog="vctl serve stop",
+        description=(
+            "Gracefully shut down the running vllm. "
+            "Drain LB endpoint → wait for in-flight requests → "
+            "remove from LB → SIGTERM tmux session → kill if grace exceeded."
+        ),
+    )
     p.parse_args(argv_rest)
 
     rc = resolve(ns.config, profile=ns.profile)
@@ -165,7 +188,14 @@ def _cmd_stop(ns: argparse.Namespace, argv_rest: list[str]) -> int:
 
 def _cmd_restart(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     """Stop vllm and start again under a fresh tmux session."""
-    p = argparse.ArgumentParser(prog="vctl serve restart")
+    p = argparse.ArgumentParser(
+        prog="vctl serve restart",
+        description=(
+            "Stop the running vllm and start a fresh instance under the same profile. "
+            "Preserves config; logs a warning if the snapshot in cmd.json drifted from "
+            "the current resolved config."
+        ),
+    )
     p.parse_args(argv_rest)
 
     rc = resolve(ns.config, profile=ns.profile)
@@ -186,7 +216,14 @@ def _cmd_console(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     """Console into the live vllm tmux session. Ctrl-B D detaches without killing vllm."""
     from vctl.vllm_manager import VllmManager
 
-    p = argparse.ArgumentParser(prog="vctl serve console")
+    p = argparse.ArgumentParser(
+        prog="vctl serve console",
+        description=(
+            "Attach the operator's terminal to the live vllm tmux session. "
+            "Ctrl-B D detaches without killing vllm. "
+            "Use to inspect live model output, debug warmup, or send Ctrl-C inside the session."
+        ),
+    )
     p.parse_args(argv_rest)
 
     rc = resolve(ns.config, profile=ns.profile)
@@ -205,7 +242,13 @@ def _cmd_logs(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     """Print the last N lines of the vllm log, stream with -f, or prune with --prune."""
     from vctl.vllm_manager import VllmManager
 
-    p = argparse.ArgumentParser(prog="vctl serve logs")
+    p = argparse.ArgumentParser(
+        prog="vctl serve logs",
+        description=(
+            "Print the last N lines of the vllm log, follow new lines with -f, "
+            "or prune the log file in-place with --prune (preserves tmux pipe-pane fd)."
+        ),
+    )
     p.add_argument(
         "-n",
         type=int,

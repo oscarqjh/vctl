@@ -586,3 +586,19 @@ def test_serve_logs_prune_with_follow_rejected(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         serve_mod.run(ns, ["logs", "--prune", "--follow"])
     assert exc_info.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# Help discoverability: epilog + sub-verb descriptions
+# ---------------------------------------------------------------------------
+
+
+def test_serve_help_lists_subverbs(capsys: pytest.CaptureFixture[str]) -> None:
+    """`vctl serve --help` must list all sub-verbs in the epilog."""
+    from vctl.commands.serve import _build_subparser
+
+    parser = _build_subparser()
+    help_text = parser.format_help()
+
+    for verb in ("status", "stop", "restart", "console", "logs"):
+        assert verb in help_text, f"sub-verb {verb!r} missing from serve help"

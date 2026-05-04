@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 
 from vctl.lb.manager import LbManager
 from vctl.lb.state import BackendState
+from vctl.platform import tmux_kill as _tmux_kill  # noqa: F401  (re-export for monkeypatch)
+from vctl.platform import tmux_run_detached_argv as _tmux_run_detached_argv  # noqa: F401
+from vctl.platform import tmux_session_exists as _tmux_session_exists
 from vctl.resolver import resolve
 
 if TYPE_CHECKING:
@@ -38,6 +41,7 @@ _LB_VERB_HELP: dict[str, str] = {
     "attach": "Probe localhost:<port>/v1/models then add self to its pool",
     "detach": "Drain self, wait for in-flight to drain, remove",
     "health": "Probe each registered backend; exit non-zero on any unhealthy",
+    "prune": "Remove health-check-failed (DOWN) backends past threshold",
 }
 
 
@@ -100,6 +104,26 @@ def _build_subparser() -> argparse.ArgumentParser:
     dr.add_argument("--pool", default=None, help="explicit pool name")
     at = sp.add_parser("attach", help=_LB_VERB_HELP["attach"])
     at.add_argument("port", type=int, nargs="?", help="local vllm port to probe (default: 8000)")
+    prune = sp.add_parser("prune", help=_LB_VERB_HELP["prune"])
+    prune.add_argument(
+        "--pool",
+        default=None,
+        help="scope to one pool (default: all pools); exit 3 on unknown pool name",
+    )
+    prune.add_argument(
+        "--threshold",
+        default=None,
+        metavar="DURATION",
+        help=(
+            "override dead threshold (e.g. 5m, 300s, 2h); "
+            "default: cluster.lb.prune.threshold or '5m'"
+        ),
+    )
+    prune.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print candidates without removing; exit 0",
+    )
     return p
 
 
@@ -146,8 +170,14 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         except RuntimeError as e:
             print(str(e), file=sys.stderr)
             return 4
+        cfg_override = getattr(ns, "config", None)
+        cluster_yaml = (
+            Path(cfg_override) if cfg_override else Path.home() / ".vctl" / "cluster.yaml"
+        )
+        _spawn_watcher_if_enabled(mgr, cluster_yaml)
         return 0
     if verb == "stop":
+        _stop_watcher_if_running(mgr)
         mgr.stop()
         return 0
     if verb == "status":
@@ -167,6 +197,8 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         if log_path.exists():
             print(log_path.read_text())
         return 0
+    if verb == "prune":
+        return _do_prune(mgr, parsed)
     # Scaling verbs (Task 17).
     from vctl.commands import lb_scaling
 
@@ -186,6 +218,7 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
 
     from vctl.commands.lb_scaling import _client
     from vctl.lb.probe import fetch_vllm_metrics
+    from vctl.lb.prune import _watcher_status
 
     console: Console = _console if _console is not None else Console(force_terminal=False)
 
@@ -203,11 +236,14 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
     stats_url = f"http://{mgr.lb.host}:{mgr.lb.stats.bind_port}"
 
     admin_status = "(reachable)" if admin_reachable else "(unreachable)"
+    ws = _watcher_status(mgr)
+    watcher_state = str(ws["state"])
     proc_lines = [
         f"pid {pid}  alive={str(pid_alive).lower()}  admin={admin_bind} {admin_status}",
         f"tmux: {mgr.tmux_name}  is_local_host={str(is_local_host).lower()}",
         f"cfg: {cfg_path}",
         f"stats UI: {stats_url}",
+        f"watcher: {watcher_state}",
     ]
     if not lb_running:
         proc_lines.append("[bold red][LB STOPPED][/bold red]")
@@ -621,3 +657,109 @@ def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:
         if deadline is not None:
             sleep_s = min(sleep_s, max(0.0, deadline - time.monotonic()))
         time.sleep(sleep_s)
+
+
+def _spawn_watcher_if_enabled(mgr: LbManager, cluster_yaml_path: Path) -> None:
+    """Spawn vctl-lb-watch watcher session after lb start, if prune.enabled is True."""
+    from vctl.lb.prune import _spawn_watcher
+
+    if not mgr.lb.prune.enabled:
+        return
+    if _tmux_session_exists("vctl-lb-watch"):
+        print(
+            "watcher already running (session=vctl-lb-watch) — skipping spawn",
+            file=sys.stderr,
+        )
+        return
+    _spawn_watcher(mgr, mgr.lb.prune, cluster_yaml_path)
+    print("watcher started (session=vctl-lb-watch)", file=sys.stderr)
+
+
+def _stop_watcher_if_running(mgr: LbManager) -> None:
+    """Stop vctl-lb-watch watcher session before lb stop.
+
+    Always calls _stop_watcher regardless of prune.enabled — avoids zombie
+    session leaks when the operator toggles enabled=False after a running watcher.
+    Prints a message only if a session was actually killed.
+    """
+    from vctl.lb.prune import _stop_watcher
+
+    if _stop_watcher(mgr):
+        print("watcher stopped", file=sys.stderr)
+
+
+def _do_prune(mgr: LbManager, parsed: argparse.Namespace) -> int:
+    """Handle `vctl lb prune`.
+
+    Threshold resolution order:
+      1. --threshold flag (if given and valid)
+      2. cluster.lb.prune.threshold YAML field
+      3. Hardcoded default "5m"
+
+    Pool list:
+      - If --pool given: validate against configured pools first; exit 3 if unknown.
+      - Otherwise: iterate all configured pools.
+
+    Each candidate calls Reconciler.want_absent (haproxy-first ordering preserved).
+    """
+    from vctl.duration import _parse_duration
+    from vctl.lb.errors import BackendOpFailed, LbUnreachable
+    from vctl.lb.prune import _collect_prune_candidates
+    from vctl.lb.reconciler import Reconciler
+
+    # Step 1: Resolve threshold string.
+    raw_threshold: str = (
+        parsed.threshold if parsed.threshold is not None else mgr.lb.prune.threshold
+    )
+
+    try:
+        threshold_s = _parse_duration(raw_threshold)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    # Step 2: Determine target pool list with pre-flight validation.
+    pool_name_filter: str | None = getattr(parsed, "pool", None)
+    if pool_name_filter is not None:
+        configured = {p.name for p in mgr.lb.pools}
+        if pool_name_filter not in configured:
+            available = ", ".join(sorted(configured))
+            print(
+                f"unknown pool: {pool_name_filter!r}; available: {available}",
+                file=sys.stderr,
+            )
+            return 3
+        target_pool_names = [pool_name_filter]
+    else:
+        target_pool_names = [p.name for p in mgr.lb.pools]
+
+    dry_run: bool = getattr(parsed, "dry_run", False)
+    rec = Reconciler(mgr)
+
+    # Step 3-7: Collect candidates and act.
+    for pool_name in target_pool_names:
+        try:
+            candidates = _collect_prune_candidates(mgr, pool_name, threshold_s)
+        except LbUnreachable as exc:
+            print(f"lb prune: {exc}", file=sys.stderr)
+            return 4
+
+        for ep, lastchg_s in candidates:
+            duration_str = _format_duration(lastchg_s)
+            if dry_run:
+                print(
+                    f"would prune {ep} from pool {pool_name} (DOWN for {duration_str})",
+                    file=sys.stderr,
+                )
+                continue
+            try:
+                rec.want_absent(ep, pool_name)
+            except BackendOpFailed as exc:
+                print(f"lb prune: {exc}", file=sys.stderr)
+                return 1
+            print(
+                f"pruned {ep} from pool {pool_name} (DOWN for {duration_str})",
+                file=sys.stderr,
+            )
+
+    return 0

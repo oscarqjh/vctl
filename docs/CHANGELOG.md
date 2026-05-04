@@ -3,6 +3,23 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.6.0] - 2026-05-04
+
+### Added
+
+- **`vctl lb prune`** — manual reaper command. Removes backends that are HAProxy-`DOWN` and have been DOWN for longer than a configurable threshold. Threshold precedence: `--threshold DURATION` flag → `cluster.lb.prune.threshold` field in cluster.yaml → `"5m"` default. Flags: `--pool NAME` (scope to one pool, exit 3 on unknown pool), `--dry-run` (preview without acting). `MAINT`/`DRAIN` backends are always preserved — only health-check-failed (`DOWN`) backends are eligible. Reuses existing `Reconciler.want_absent` so haproxy-first ordering is preserved.
+- **Auto-watcher bundled into `vctl lb start/stop/status`** — when `cluster.lb.prune.enabled: true` (default), `vctl lb start` also spawns a background prune loop in tmux session `vctl-lb-watch` alongside the HAProxy session. Sentinel pidfile at `~/.vctl/lb/watch.pid` contains `tmux:vctl-lb-watch`. `vctl lb stop` kills both sessions idempotently. `vctl lb status` reports the watcher state. Set `cluster.lb.prune.enabled: false` to disable the auto-watcher (manual `vctl lb prune` still works).
+- **`src/vctl/duration.py`** — new stdlib-only `_parse_duration("5m")` → 300 helper. Accepts `Ns`, `Nm`, `Nh`, `Nd` suffixes.
+- **`LbPrune` pydantic class** in `cluster.yaml`'s `lb` section. New schema:
+  ```yaml
+  lb:
+    prune:
+      enabled: true        # set false to disable auto-watcher
+      threshold: 5m
+      watch_interval: 30s
+  ```
+  Defaults match historical behavior; existing cluster.yaml files need no migration.
+
 ## [0.5.6] - 2026-05-04
 
 ### Fixed

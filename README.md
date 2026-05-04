@@ -235,47 +235,62 @@ Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Setting
 
 ## Command reference
 
+For the complete reference (all flags, exit codes, examples) see
+[`docs/CLI-REFERENCE.md`](docs/CLI-REFERENCE.md).
+
 ### Top-level
 
 | Command | Description |
 |---|---|
 | `vctl info` | Print resolved cluster + profile config as a table. |
-| `vctl profiles` | List available profile YAML files; `*` marks the active one. |
-| `vctl profiles set <name>` | Switch the active profile by rewriting `profile:` in `cluster.yaml`. |
 | `vctl args` | Print the vLLM CLI args that would be used for the active profile. |
-| `vctl preflight` | Validate environment: GPU count, port availability, venv existence. |
-| `vctl serve [PROFILE]` | Launch vLLM backends and auto-attach to LB. |
-| `vctl stop` | Gracefully stop all backends for the active profile and detach from LB. |
+| `vctl profiles [list\|set <name>]` | List available profile YAMLs; `set` switches the active profile. |
+| `vctl preflight [--json]` | Validate environment: GPU count, /dev/shm, port availability, venv. |
+| `vctl serve [--foreground] [--skip-preflight]` | Spawn vLLM in a detached tmux session and attach to LB pool. |
+| `vctl stop [--json]` | Drain this host's endpoints from all LB pools and kill the vllm tree. |
+| `vctl init-config [--dir] [--force] [--profiles]` | Scaffold `cluster.yaml` + model profiles into `~/.vctl/`. |
+| `vctl config <validate\|show\|schema>` | Validate/show/dump JSON Schema for config files. |
+
+### `vctl serve` sub-commands
+
+| Command | Description |
+|---|---|
+| `vctl serve status` | Show tmux/pid/lb-attached state and log size for the active profile. |
+| `vctl serve stop` | Drain LB → wait idle → remove → SIGTERM tmux → kill if grace exceeded. |
+| `vctl serve restart` | Stop + start in-place (preserves profile). |
+| `vctl serve console` | Attach terminal to live vllm tmux session. `Ctrl-B D` detaches. |
+| `vctl serve logs [-n N] [-f] [--prune]` | Tail / follow / prune the vllm log. |
 
 ### `vctl lb` — load-balancer management
 
 | Command | Description |
 |---|---|
-| `lb install` | Download and install HAProxy binary (uses `HAPROXY_VERSION`). |
-| `lb start` | Start HAProxy on the LB host (guards against self-IP conflict, exit 4). |
-| `lb stop` | Stop the HAProxy process. |
-| `lb info` | **Unified dashboard**: process panel + per-pool table with scur/qcur/running/waiting. Always exits 0. |
-| `lb health` | Probe each registered backend; exit non-zero on any unhealthy (scripting gate). |
-| `lb is-host` | Exit 0 if this machine is the configured LB host, else exit 1. |
-| `lb where` | Print the LB host IP. |
-| `lb wait-ready [N] [--pool <name>]` | Block until ≥N ready backends pass health checks AND the LB front returns HTTP 200. |
+| `lb install` | Install HAProxy (conda → source-build fallback; SHA256-pinned). |
+| `lb start [--force]` | Start HAProxy on the LB host (guards against self-IP conflict, exit 4). |
+| `lb stop` | Stop the HAProxy process and watcher session. |
+| `lb status` | **Unified dashboard**: process panel + per-pool table with scur/qcur/running/waiting. Always exits 0. |
+| `lb reload` | Reload HAProxy config without dropping connections. |
 | `lb logs` | Print HAProxy log file. |
 | `lb config` | Print the rendered HAProxy config. |
-| `lb reload` | Reload HAProxy config without dropping connections. |
-| `lb add <ep> [--pool <name>]` | Add a backend to HAProxy (idempotent). Auto-routes by `/v1/models` probe; `--pool` overrides. |
-| `lb remove` | Remove a backend from HAProxy. |
-| `lb drain <ep> [--pool <name>]` | Set a backend to DRAIN state (stops new requests, waits for in-flight). |
-| `lb attach` | Register a backend and wait for its `/v1/models` health probe to pass. |
-| `lb detach` | Drain then remove a backend. |
+| `lb health` | Probe each registered backend; exit non-zero on any unhealthy (scripting gate). |
+| `lb is-host` | Exit 0 if this machine is the configured LB host, else exit 1. |
+| `lb where [--pool <name>]` | Print the LB host:port (all pools or one). |
+| `lb wait-ready [N] [--pool <name>]` | Block until ≥N ready backends pass health checks AND the LB front returns HTTP 200. |
+| `lb add <ep> [--pool <name>]` | Add a backend to HAProxy (idempotent). Auto-routes by `/v1/models` probe. |
+| `lb remove <ep>` | Remove a backend from HAProxy. |
+| `lb drain <ep> [--pool <name>]` | Set a backend to DRAIN state (stops new requests, finishes in-flight). |
+| `lb attach [port]` | Probe `localhost:<port>/v1/models` then add self to the matching pool. |
+| `lb detach [--force]` | Drain self, wait for in-flight, remove. `--force` drops active sessions. |
 | `lb auto-add` | Discover live backends from the state file and attach all. |
+| `lb prune [--pool P] [--threshold D] [--dry-run]` | Remove DOWN backends past the dead threshold. |
 
 ### `vctl config` — schema and inspection
 
 | Command | Description |
 |---|---|
-| `config validate` | Validate `cluster.yaml` (and optional profile) against the Pydantic schema. |
+| `config validate <path>` | Validate `cluster.yaml` or a profile YAML against the Pydantic schema. |
 | `config show` | Print the fully-merged resolved config as YAML. |
-| `config schema` | Print the JSON schema for `cluster.yaml` or a profile. |
+| `config schema` | Print the JSON Schema for `ClusterFile` and `ProfileFile`. |
 
 ---
 
@@ -386,6 +401,7 @@ VCTL_INSTALLER_INSECURE=1 vctl lb install
 
 ## Documentation
 
+- [`docs/CLI-REFERENCE.md`](docs/CLI-REFERENCE.md) — complete command reference: every flag, exit code, and sub-command.
 - [`docs/RESTART.md`](docs/RESTART.md) — safe procedures for restarting a vllm backend (both `vctl serve` mode and bare `vllm serve` mode).
 - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — release history.
 - [`docs/BACKLOG.md`](docs/BACKLOG.md) — open work + ideas.

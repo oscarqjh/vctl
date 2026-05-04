@@ -118,6 +118,22 @@ class Pool(_Strict):
         return v
 
 
+class LbPrune(_Strict):
+    """Configuration for `vctl lb prune` and the auto-watcher bundled in `lb start`."""
+
+    enabled: bool = True  # set false to disable auto-watcher on lb start
+    threshold: str = "5m"  # minimum DOWN duration before backend is prunable
+    watch_interval: str = "30s"  # polling interval for the auto-watcher loop
+
+    @field_validator("threshold", "watch_interval", mode="after")
+    @classmethod
+    def _valid_duration(cls, v: str) -> str:
+        from vctl.duration import _parse_duration  # lazy — avoids circular import at module load
+
+        _parse_duration(v)  # raises ValueError on bad input; pydantic converts to ValidationError
+        return v
+
+
 class LbHaproxy(_Strict):
     kind: Literal["haproxy"] = "haproxy"
     host: Annotated[str, Field(min_length=1)]  # D9: no empty host
@@ -127,6 +143,7 @@ class LbHaproxy(_Strict):
     algorithm: str = "leastconn"
     health: LbHealth = Field(default_factory=LbHealth)
     defaults: LbDefaults = Field(default_factory=LbDefaults)
+    prune: LbPrune = Field(default_factory=LbPrune)
     pools: list[Pool] = Field(default_factory=list)
 
     @model_validator(mode="after")
