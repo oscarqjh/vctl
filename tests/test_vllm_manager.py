@@ -519,3 +519,100 @@ def test_logs_no_log_file_returns_1(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert result == 1
     err = capsys.readouterr().err
     assert "no log file" in err.lower() or str(vm.log_path) in err
+
+
+# ---------------------------------------------------------------------------
+# Prune tests (Change 4)
+# ---------------------------------------------------------------------------
+
+
+def test_logs_prune_keeps_last_n_lines(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """prune(keep=50) with 200 lines → file has exactly 50 lines, inode preserved."""
+    from vctl.vllm_manager import VllmManager
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    lines = [f"line {i}\n" for i in range(200)]
+    vm.log_path.write_text("".join(lines))
+
+    inode_before = vm.log_path.stat().st_ino
+
+    result = vm.logs(prune=True, keep=50)
+    assert result == 0
+
+    inode_after = vm.log_path.stat().st_ino
+    assert inode_before == inode_after, "inode must be preserved (in-place rewrite)"
+
+    content = vm.log_path.read_text()
+    written_lines = content.splitlines()
+    assert len(written_lines) == 50
+    # Should be the last 50 lines
+    assert written_lines[0] == "line 150"
+    assert written_lines[-1] == "line 199"
+
+    out = capsys.readouterr().out
+    assert "kept last 50 lines" in out
+    assert "was 200" in out
+
+
+def test_logs_prune_all_truncates(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """prune(prune_all=True) → file is 0 bytes, inode preserved."""
+    from vctl.vllm_manager import VllmManager
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    vm.log_path.write_text("some\nlog\nlines\n")
+
+    inode_before = vm.log_path.stat().st_ino
+
+    result = vm.logs(prune=True, prune_all=True)
+    assert result == 0
+
+    inode_after = vm.log_path.stat().st_ino
+    assert inode_before == inode_after, "inode must be preserved (in-place truncate)"
+
+    assert vm.log_path.stat().st_size == 0, "file must be 0 bytes after prune --all"
+
+    out = capsys.readouterr().out
+    assert "removed everything" in out
+
+
+def test_logs_prune_no_log_file_returns_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """prune=True when log file doesn't exist → return 1 with stderr message."""
+    from vctl.vllm_manager import VllmManager
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+    # log_path does not exist
+
+    result = vm.logs(prune=True)
+    assert result == 1
+    err = capsys.readouterr().err
+    assert "no log file" in err.lower() or str(vm.log_path) in err
+
+
+def test_logs_prune_below_keep_threshold_no_op(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """prune(keep=100) with only 30 lines → file unchanged, message says 'nothing to do'."""
+    from vctl.vllm_manager import VllmManager
+
+    rc = _make_rc()
+    vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
+
+    original_content = "".join(f"line {i}\n" for i in range(30))
+    vm.log_path.write_text(original_content)
+
+    result = vm.logs(prune=True, keep=100)
+    assert result == 0
+
+    # File must be unchanged
+    assert vm.log_path.read_text() == original_content
+
+    out = capsys.readouterr().out
+    assert "nothing to do" in out
+    assert "30" in out  # mentions the number of lines
+    assert "100" in out  # mentions the keep threshold

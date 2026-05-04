@@ -524,3 +524,65 @@ def test_serve_stop_subverb_dispatches(tmp_path: Path, monkeypatch: pytest.Monke
     rc_code = serve_mod.run(ns, ["stop"])
     assert rc_code == 0
     assert dispatched == ["stop"]
+
+
+# ---------------------------------------------------------------------------
+# Change 4: --prune flag dispatch tests
+# ---------------------------------------------------------------------------
+
+
+def test_serve_logs_prune_dispatches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """'vctl serve logs --prune' calls vm.logs(prune=True)."""
+    import argparse
+
+    import vctl.commands.serve as serve_mod
+    import vctl.vllm_manager as vm_mod
+    from tests.test_vllm_manager import _make_rc
+
+    rc = _make_rc()
+    monkeypatch.setattr(serve_mod, "resolve", lambda *a, **kw: rc)
+
+    logs_kwargs: list[dict[str, object]] = []
+
+    class FakeVllmManager:
+        def __init__(self, *a: object, **kw: object) -> None:
+            pass
+
+        def logs(self, **kwargs: object) -> int:
+            logs_kwargs.append(dict(kwargs))
+            return 0
+
+    # VllmManager is imported lazily inside _cmd_logs via
+    # `from vctl.vllm_manager import VllmManager`, so patch the class on the
+    # source module, not on serve_mod.
+    monkeypatch.setattr(vm_mod, "VllmManager", FakeVllmManager)
+
+    ns = argparse.Namespace(config=tmp_path / "cluster.yaml", profile="qwen3-9b", log_format="json")
+    rc_code = serve_mod.run(ns, ["logs", "--prune"])
+    assert rc_code == 0
+    assert logs_kwargs, "vm.logs must be called"
+    assert logs_kwargs[0].get("prune") is True
+
+
+def test_serve_logs_all_without_prune_rejected(tmp_path: Path) -> None:
+    """'vctl serve logs --all' without --prune → exit 2."""
+    import argparse
+
+    import vctl.commands.serve as serve_mod
+
+    ns = argparse.Namespace(config=tmp_path / "cluster.yaml", profile="qwen3-9b", log_format="json")
+    with pytest.raises(SystemExit) as exc_info:
+        serve_mod.run(ns, ["logs", "--all"])
+    assert exc_info.value.code == 2
+
+
+def test_serve_logs_prune_with_follow_rejected(tmp_path: Path) -> None:
+    """'vctl serve logs --prune --follow' → exit 2."""
+    import argparse
+
+    import vctl.commands.serve as serve_mod
+
+    ns = argparse.Namespace(config=tmp_path / "cluster.yaml", profile="qwen3-9b", log_format="json")
+    with pytest.raises(SystemExit) as exc_info:
+        serve_mod.run(ns, ["logs", "--prune", "--follow"])
+    assert exc_info.value.code == 2

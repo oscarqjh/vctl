@@ -202,7 +202,7 @@ def _cmd_console(ns: argparse.Namespace, argv_rest: list[str]) -> int:
 
 
 def _cmd_logs(ns: argparse.Namespace, argv_rest: list[str]) -> int:
-    """Print the last N lines of the vllm log, or stream with -f."""
+    """Print the last N lines of the vllm log, stream with -f, or prune with --prune."""
     from vctl.vllm_manager import VllmManager
 
     p = argparse.ArgumentParser(prog="vctl serve logs")
@@ -219,13 +219,45 @@ def _cmd_logs(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         action="store_true",
         help="Stream new lines as they are written",
     )
+    p.add_argument(
+        "--prune",
+        action="store_true",
+        help=(
+            "Trim the log file in-place (keeps tmux pipe-pane's fd alive). "
+            "Mutually exclusive with --follow."
+        ),
+    )
+    p.add_argument(
+        "--keep",
+        type=int,
+        default=10000,
+        metavar="N",
+        help="With --prune: keep last N lines (default: 10000)",
+    )
+    p.add_argument(
+        "--all",
+        dest="prune_all",
+        action="store_true",
+        help="With --prune: wipe everything instead of keeping last N",
+    )
     parsed = p.parse_args(argv_rest)
+
+    if parsed.prune_all and not parsed.prune:
+        p.error("--all requires --prune")
+    if parsed.prune and parsed.follow:
+        p.error("--prune and --follow are mutually exclusive")
 
     rc = resolve(ns.config, profile=ns.profile)
     state_dir = Path(rc.cluster.state_dir)
     run_dir = Path.home() / ".vctl"
     vm = VllmManager(rc, state_dir=state_dir, run_dir=run_dir)
-    return vm.logs(n=parsed.n, follow=parsed.follow)
+    return vm.logs(
+        n=parsed.n,
+        follow=parsed.follow,
+        prune=parsed.prune,
+        keep=parsed.keep,
+        prune_all=parsed.prune_all,
+    )
 
 
 def _run_foreground(ns: argparse.Namespace, parsed: argparse.Namespace) -> int:
