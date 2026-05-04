@@ -507,6 +507,17 @@ def _run_resume(
                     to_retry.append(ep)
                 else:
                     # abort (c or anything else)
+                    if not dry_run:
+                        sf.write(
+                            {
+                                "pool": pool_name,
+                                "started_at": started_at,
+                                "completed": completed,
+                                "failed": failed,
+                                "pending": pending,
+                                "in_progress": False,
+                            }
+                        )
                     print(
                         f"Aborted. Session file preserved at {sf._path}.",
                         file=sys.stderr,

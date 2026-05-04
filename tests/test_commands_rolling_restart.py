@@ -740,6 +740,10 @@ def test_resume_failed_ep_still_down_abort_choice(
     assert rc == 1
     # Session file must still exist (preserved for operator inspection)
     assert (sess_dir / "mypool.json").exists()
+    import json
+
+    data = json.loads((sess_dir / "mypool.json").read_text())
+    assert data["in_progress"] is False, "abort must reset in_progress so user can re-resume"
 
 
 def test_resume_continues_pending_after_failed_handling(
