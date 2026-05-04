@@ -556,3 +556,233 @@ def test_fresh_run_halt_on_failure_persists_session_file(
     assert "ep2:8000" in data["failed"]
     assert "ep3:8000" in data["pending"]
     assert data["in_progress"] is False
+
+
+# ---------------------------------------------------------------------------
+# Task 5: _run_resume
+# ---------------------------------------------------------------------------
+
+
+def _write_session(path: Path, data: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps(data))
+
+
+def test_resume_verifies_failed_ep_now_up_marks_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AT-3: failed ep is now UP in HAProxy → moved to completed without ssh."""
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    sess_dir.mkdir(parents=True)
+
+    session_data: dict[str, object] = {
+        "pool": "mypool",
+        "started_at": "2026-05-04T00:00:00+00:00",
+        "completed": ["ep1:8000"],
+        "failed": ["ep2:8000"],
+        "pending": ["ep3:8000"],
+        "in_progress": False,
+    }
+    _write_session(sess_dir / "mypool.json", session_data)
+
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    # ep2 returns UP on the verification probe
+    def _fake_verify(ep: str, pool: str, m: object, timeout_s: int) -> bool:
+        return ep == "ep2:8000"
+
+    monkeypatch.setattr(rr, "_verify_ep_up", _fake_verify)
+
+    # ep3 restart succeeds
+    monkeypatch.setattr(
+        rr,
+        "_restart_one_ep",
+        lambda ep, **kwargs: "ok",
+    )
+    monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000", "ep2:8000", "ep3:8000"])
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    # Create sf directly (bypass _SessionFile.__init__ which creates _SESSION_DIR)
+    sf2 = rr._SessionFile.__new__(rr._SessionFile)
+    sf2._path = sess_dir / "mypool.json"
+    sf2._lock_path = sess_dir / "mypool.lock"
+    rc = rr._run_resume(parsed, mgr, sf2, dict(session_data))  # type: ignore[arg-type]
+
+    assert rc == 0
+    out = capsys.readouterr()
+    assert "verified" in out.err and "ep2:8000" in out.err
+    # Session file deleted on full success
+    assert not (sess_dir / "mypool.json").exists()
+
+
+def test_resume_failed_ep_still_down_skip_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operator picks 'a' (skip): ep2 moves to completed, run continues."""
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    sess_dir.mkdir(parents=True)
+
+    session_data: dict[str, object] = {
+        "pool": "mypool",
+        "started_at": "2026-05-04T00:00:00+00:00",
+        "completed": [],
+        "failed": ["ep1:8000"],
+        "pending": [],
+        "in_progress": False,
+    }
+    _write_session(sess_dir / "mypool.json", session_data)
+
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    # ep1 is still DOWN
+    monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, m, timeout_s: False)
+    # Operator chooses "a" (skip)
+    monkeypatch.setattr(rr.sys, "stdin", type("FakeStdin", (), {"read": lambda s, n: "a"})())
+    monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000"])
+
+    sf = rr._SessionFile.__new__(rr._SessionFile)
+    sf._path = sess_dir / "mypool.json"
+    sf._lock_path = sess_dir / "mypool.lock"
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    rc = rr._run_resume(parsed, mgr, sf, dict(session_data))  # type: ignore[arg-type]
+    assert rc == 0
+    assert not (sess_dir / "mypool.json").exists()
+
+
+def test_resume_failed_ep_still_down_retry_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operator picks 'b' (retry): ep1 ssh called again, succeeds."""
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    sess_dir.mkdir(parents=True)
+
+    session_data: dict[str, object] = {
+        "pool": "mypool",
+        "started_at": "2026-05-04T00:00:00+00:00",
+        "completed": [],
+        "failed": ["ep1:8000"],
+        "pending": [],
+        "in_progress": False,
+    }
+    _write_session(sess_dir / "mypool.json", session_data)
+
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    restart_calls: list[str] = []
+
+    def _fake_restart(ep: str, **kwargs: object) -> str:
+        restart_calls.append(ep)
+        return "ok"
+
+    # ep1 is DOWN in initial probe → prompt → operator retries → _restart_one_ep called
+    monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, m, timeout_s: False)
+    monkeypatch.setattr(rr, "_restart_one_ep", _fake_restart)
+    monkeypatch.setattr(rr.sys, "stdin", type("FakeStdin", (), {"read": lambda s, n: "b"})())
+    monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000"])
+
+    sf = rr._SessionFile.__new__(rr._SessionFile)
+    sf._path = sess_dir / "mypool.json"
+    sf._lock_path = sess_dir / "mypool.lock"
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    rc = rr._run_resume(parsed, mgr, sf, dict(session_data))  # type: ignore[arg-type]
+    assert rc == 0
+    assert "ep1:8000" in restart_calls
+
+
+def test_resume_failed_ep_still_down_abort_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operator picks 'c' (abort): exit 1, session file preserved unchanged."""
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    sess_dir.mkdir(parents=True)
+
+    session_data: dict[str, object] = {
+        "pool": "mypool",
+        "started_at": "2026-05-04T00:00:00+00:00",
+        "completed": [],
+        "failed": ["ep1:8000"],
+        "pending": ["ep2:8000"],
+        "in_progress": False,
+    }
+    _write_session(sess_dir / "mypool.json", session_data)
+
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, m, timeout_s: False)
+    monkeypatch.setattr(rr, "_restart_one_ep", lambda ep, **kwargs: "ok")
+    monkeypatch.setattr(rr.sys, "stdin", type("FakeStdin", (), {"read": lambda s, n: "c"})())
+    monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000", "ep2:8000"])
+
+    sf = rr._SessionFile.__new__(rr._SessionFile)
+    sf._path = sess_dir / "mypool.json"
+    sf._lock_path = sess_dir / "mypool.lock"
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    rc = rr._run_resume(parsed, mgr, sf, dict(session_data))  # type: ignore[arg-type]
+    assert rc == 1
+    # Session file must still exist (preserved for operator inspection)
+    assert (sess_dir / "mypool.json").exists()
+
+
+def test_resume_continues_pending_after_failed_handling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After resolving the failed ep (skip), pending ep3 is also restarted."""
+    import vctl.commands.rolling_restart as rr
+    from vctl.lb.state import BackendState
+
+    sess_dir = tmp_path / "sessions"
+    monkeypatch.setattr(rr, "_SESSION_DIR", sess_dir)
+    sess_dir.mkdir(parents=True)
+
+    session_data: dict[str, object] = {
+        "pool": "mypool",
+        "started_at": "2026-05-04T00:00:00+00:00",
+        "completed": ["ep1:8000"],
+        "failed": ["ep2:8000"],
+        "pending": ["ep3:8000"],
+        "in_progress": False,
+    }
+    _write_session(sess_dir / "mypool.json", session_data)
+
+    mgr = _make_full_mgr(tmp_path, pool_names=["mypool"])
+
+    restarted: list[str] = []
+
+    def _fake_restart(ep: str, **kwargs: object) -> str:
+        restarted.append(ep)
+        return "ok"
+
+    # ep2 still DOWN → skip
+    monkeypatch.setattr(rr, "_verify_ep_up", lambda ep, pool, m, timeout_s: False)
+    monkeypatch.setattr(rr, "_restart_one_ep", _fake_restart)
+    monkeypatch.setattr(rr.sys, "stdin", type("FakeStdin", (), {"read": lambda s, n: "a"})())
+    monkeypatch.setattr(BackendState, "list", lambda self: ["ep1:8000", "ep2:8000", "ep3:8000"])
+
+    sf = rr._SessionFile.__new__(rr._SessionFile)
+    sf._path = sess_dir / "mypool.json"
+    sf._lock_path = sess_dir / "mypool.lock"
+
+    parsed = rr._build_subparser().parse_args(["--pool", "mypool"])
+    rc = rr._run_resume(parsed, mgr, sf, dict(session_data))  # type: ignore[arg-type]
+    assert rc == 0
+    # ep3 must have been restarted as the pending ep
+    assert "ep3:8000" in restarted

@@ -406,9 +406,176 @@ def _run_resume(
     sf: _SessionFile,
     session: dict[str, Any],
 ) -> int:
-    """Resume an interrupted rolling restart. Implemented in Task 5."""
-    # Placeholder — Task 5 will fill this in.
-    return _run_fresh(parsed, mgr)
+    """Resume an interrupted rolling restart from a persisted session file.
+
+    For each ep in `failed`:
+      - Quick HAProxy probe (5s window): if UP → mark completed, log, continue.
+      - Still DOWN → prompt operator: (a) skip, (b) retry, (c) abort.
+    Then continue sequentially with `pending` eps via the same restart loop.
+    """
+    pool_name: str = str(session.get("pool", parsed.pool))
+    started_at: str = str(session.get("started_at", ""))
+    dry_run: bool = getattr(parsed, "dry_run", False)
+    quiet: bool = getattr(parsed, "quiet", False)
+    ssh_user: str = getattr(parsed, "ssh_user", "")
+    vllm_timeout: int = getattr(parsed, "vllm_timeout", 600)
+    ready_timeout: int = getattr(parsed, "ready_timeout", 60)
+    remote_vctl_path: str | None = getattr(parsed, "remote_vctl_path", None)
+
+    completed: list[str] = list(session.get("completed", []))
+    failed: list[str] = list(session.get("failed", []))
+    pending: list[str] = list(session.get("pending", []))
+
+    total_eps = len(completed) + len(failed) + len(pending)
+    print(
+        f"resuming rolling-restart for pool {pool_name!r}: "
+        f"{len(completed)} completed, {len(failed)} failed, {len(pending)} pending "
+        f"({total_eps} total)",
+        file=sys.stderr,
+    )
+
+    # Mark in_progress=True now that we're resuming.
+    if not dry_run:
+        sf.write(
+            {
+                "pool": pool_name,
+                "started_at": started_at,
+                "completed": completed,
+                "failed": failed,
+                "pending": pending,
+                "in_progress": True,
+            }
+        )
+
+    # Step 1: resolve the failed list.
+    to_retry: list[str] = []
+    for ep in list(failed):
+        is_up = _verify_ep_up(ep, pool_name, mgr, timeout_s=5)
+        if is_up:
+            print(
+                f"verified: {ep} was fixed externally — moving to completed",
+                file=sys.stderr,
+            )
+            failed.remove(ep)
+            completed.append(ep)
+            if not dry_run:
+                sf.write(
+                    {
+                        "pool": pool_name,
+                        "started_at": started_at,
+                        "completed": completed,
+                        "failed": failed,
+                        "pending": pending,
+                        "in_progress": True,
+                    }
+                )
+        else:
+            # DOWN/MAINT/other — prompt unless --dry-run / --quiet.
+            if dry_run or quiet:
+                # Non-interactive: default to skip.
+                print(
+                    f"{ep} is still DOWN — skipping (--dry-run/--quiet mode)",
+                    file=sys.stderr,
+                )
+                failed.remove(ep)
+                completed.append(ep)
+            else:
+                print(
+                    f"\nep {ep} is still DOWN. Choose:\n"
+                    f"  (a) skip — mark as completed and continue\n"
+                    f"  (b) retry — re-attempt restart\n"
+                    f"  (c) abort — exit now (session file preserved)\n",
+                    file=sys.stderr,
+                )
+                choice = sys.stdin.read(1).strip().lower()
+                if choice == "a":
+                    failed.remove(ep)
+                    completed.append(ep)
+                    if not dry_run:
+                        sf.write(
+                            {
+                                "pool": pool_name,
+                                "started_at": started_at,
+                                "completed": completed,
+                                "failed": failed,
+                                "pending": pending,
+                                "in_progress": True,
+                            }
+                        )
+                elif choice == "b":
+                    failed.remove(ep)
+                    to_retry.append(ep)
+                else:
+                    # abort (c or anything else)
+                    print(
+                        f"Aborted. Session file preserved at {sf._path}.",
+                        file=sys.stderr,
+                    )
+                    return 1
+
+    # Build work queue: retried eps first, then remaining pending.
+    work_queue = to_retry + pending
+    total = len(completed) + len(work_queue)
+    start_idx = len(completed) + 1
+
+    for i, ep in enumerate(work_queue):
+        idx = start_idx + i
+        outcome = _restart_one_ep(
+            ep=ep,
+            idx=idx,
+            total=total,
+            pool_name=pool_name,
+            mgr=mgr,
+            ssh_user=ssh_user,
+            vllm_timeout=vllm_timeout,
+            ready_timeout=ready_timeout,
+            dry_run=dry_run,
+            quiet=quiet,
+            remote_vctl_path=remote_vctl_path,
+        )
+        if ep in pending:
+            pending = [e for e in pending if e != ep]
+        if outcome == "ok":
+            completed.append(ep)
+            if not dry_run:
+                sf.write(
+                    {
+                        "pool": pool_name,
+                        "started_at": started_at,
+                        "completed": completed,
+                        "failed": failed,
+                        "pending": pending,
+                        "in_progress": True,
+                    }
+                )
+        else:
+            failed.append(ep)
+            if not dry_run:
+                sf.write(
+                    {
+                        "pool": pool_name,
+                        "started_at": started_at,
+                        "completed": completed,
+                        "failed": failed,
+                        "pending": pending,
+                        "in_progress": False,
+                    }
+                )
+            print(
+                f"HALTING after failure on {ep}. "
+                f"Fix the ep then re-run `vctl rolling-restart --pool {pool_name}` to resume.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Full success.
+    if not dry_run:
+        sf.delete()
+    print(
+        f"rolling-restart complete: {len(completed)} ep(s) confirmed in pool {pool_name!r}",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
