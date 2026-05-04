@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 
 from vctl.lb.manager import LbManager
 from vctl.lb.state import BackendState
+from vctl.platform import tmux_kill as _tmux_kill  # noqa: F401  (re-export for monkeypatch)
+from vctl.platform import tmux_run_detached_argv as _tmux_run_detached_argv  # noqa: F401
+from vctl.platform import tmux_session_exists as _tmux_session_exists
 from vctl.resolver import resolve
 
 if TYPE_CHECKING:
@@ -167,6 +170,11 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         except RuntimeError as e:
             print(str(e), file=sys.stderr)
             return 4
+        cfg_override = getattr(ns, "config", None)
+        cluster_yaml = (
+            Path(cfg_override) if cfg_override else Path.home() / ".vctl" / "cluster.yaml"
+        )
+        _spawn_watcher_if_enabled(mgr, cluster_yaml)
         return 0
     if verb == "stop":
         mgr.stop()
@@ -644,6 +652,22 @@ def _wait_ready(mgr: LbManager, n: int, pool_filter: str | None = None) -> int:
         if deadline is not None:
             sleep_s = min(sleep_s, max(0.0, deadline - time.monotonic()))
         time.sleep(sleep_s)
+
+
+def _spawn_watcher_if_enabled(mgr: LbManager, cluster_yaml_path: Path) -> None:
+    """Spawn vctl-lb-watch watcher session after lb start, if prune.enabled is True."""
+    from vctl.lb.prune import _spawn_watcher
+
+    if not mgr.lb.prune.enabled:
+        return
+    if _tmux_session_exists("vctl-lb-watch"):
+        print(
+            "watcher already running (session=vctl-lb-watch) — skipping spawn",
+            file=sys.stderr,
+        )
+        return
+    _spawn_watcher(mgr, mgr.lb.prune, cluster_yaml_path)
+    print("watcher started (session=vctl-lb-watch)", file=sys.stderr)
 
 
 def _do_prune(mgr: LbManager, parsed: argparse.Namespace) -> int:

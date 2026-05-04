@@ -19,6 +19,9 @@ We call lb_admin_client() twice rather than reusing one client.
 
 from __future__ import annotations
 
+import shlex
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 # NOTE: _fetch_haproxy_stats is imported at module level so tests can monkeypatch
@@ -27,11 +30,13 @@ from vctl.commands.lb import _fetch_haproxy_stats
 from vctl.duration import _parse_duration  # re-exported for callers
 from vctl.lb.errors import LbUnreachable
 from vctl.lb.runtime import lb_admin_client
+from vctl.platform import tmux_run_detached_argv
 
 if TYPE_CHECKING:
+    from vctl.config.models import LbPrune
     from vctl.lb.manager import LbManager
 
-__all__ = ["_collect_prune_candidates", "_parse_duration"]
+__all__ = ["_collect_prune_candidates", "_parse_duration", "_spawn_watcher"]
 
 
 def _collect_prune_candidates(
@@ -89,3 +94,33 @@ def _collect_prune_candidates(
 
     candidates.sort()  # deterministic: sorted by ep string
     return candidates
+
+
+def _spawn_watcher(
+    mgr: LbManager,
+    prune_cfg: LbPrune,
+    cluster_yaml_path: Path,
+) -> None:
+    """Spawn the vctl-lb-watch tmux session and write the sentinel pidfile.
+
+    Builds: while true; do python -m vctl --config <path> lb prune; sleep N; done
+    Writes: mgr.run_dir / "watch.pid"  with content "tmux:vctl-lb-watch\\n"
+    """
+    interval_s = _parse_duration(prune_cfg.watch_interval)
+    inner_argv: list[str] = [
+        sys.executable,
+        "-m",
+        "vctl",
+        "--config",
+        str(cluster_yaml_path),
+        "lb",
+        "prune",
+    ]
+    loop_cmd = f"while true; do {shlex.join(inner_argv)}; sleep {interval_s}; done"
+    tmux_run_detached_argv("vctl-lb-watch", ["bash", "-c", loop_cmd])
+
+    pid_path = mgr.run_dir / "watch.pid"
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = pid_path.with_suffix(".tmp")
+    tmp.write_text("tmux:vctl-lb-watch\n")
+    tmp.replace(pid_path)
