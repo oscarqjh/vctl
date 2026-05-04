@@ -247,6 +247,7 @@ For the complete reference (all flags, exit codes, examples) see
 | `vctl profiles [list\|set <name>]` | List available profile YAMLs; `set` switches the active profile. |
 | `vctl preflight [--json]` | Validate environment: GPU count, /dev/shm, port availability, venv. |
 | `vctl serve [--foreground] [--skip-preflight]` | Spawn vLLM in a detached tmux session and attach to LB pool. |
+| `vctl rolling-restart --pool <name>` | Sequential rolling restart of a pool's endpoints; idempotent, auto-resumes interrupted runs. |
 | `vctl stop [--json]` | Drain this host's endpoints from all LB pools and kill the vllm tree. |
 | `vctl init-config [--dir] [--force] [--profiles]` | Scaffold `cluster.yaml` + model profiles into `~/.vctl/`. |
 | `vctl config <validate\|show\|schema>` | Validate/show/dump JSON Schema for config files. |

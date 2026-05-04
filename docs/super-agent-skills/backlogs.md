@@ -2,11 +2,10 @@
 
 ## In Progress
 
-_(none — v0.6.0 shipped 2026-05-04)_
+_(none — v0.7.0 shipped 2026-05-05)_
 
 ## Up Next
 
-- **Phase 3: Rolling restart orchestration.** `vctl rolling-restart --pool <name>` — ssh-loops endpoints, drains → kills → restarts one at a time via `vctl serve restart` on each remote host. Builds on Phase 1's `VllmManager` (shipped v0.5.0) + Phase 2's `lb prune` (shipped v0.6.0). Closes the last gap in the vllm lifecycle brainstorm. Spec + plan needed.
 - **Prometheus metrics endpoint** (`vctl lb metrics`).
 - **Multi-cluster support** (`~/.config/vctl/clusters/<name>.yaml` + `--cluster <name>`).
 
@@ -27,6 +26,18 @@ _(none — v0.6.0 shipped 2026-05-04)_
 - **F5** *(probably wontfix)*: emit `daemon` directive in `render.py` + redirect stdout log to a file. F1's pidfile/pgrep fallback already covers status/stop; tradeoff (lose interactive `tmux attach`) outweighs the marginal pidfile cleanliness gain.
 
 ## Completed
+
+### 2026-05-05 — v0.7.0 rolling-restart orchestration (Phase 3 of 3)
+
+- **`vctl rolling-restart --pool <name>`** — sequential, halt-on-failure ssh-loop. For each ep in the pool: `ssh <ep_host> 'bash -lc "vctl serve restart"'` then poll HAProxy stats until `UP` (default 60s window).
+- **Idempotent re-run via per-pool session file** at `~/.vctl/lb/rolling-restart/<pool>.json`. Interrupted runs auto-resume on next invocation: failed eps probed first (operator prompt skip/retry/abort if still DOWN), then pending list resumes.
+- **Aux flags:** `--fresh` (override session, force fresh start), `--status` (read session JSON to stdout), `--abort` (delete session, idempotent), `--dry-run`, `--quiet`, `--ssh-user`, `--vllm-timeout`, `--ready-timeout`, `--remote-vctl-path`.
+- **No-TTY guard:** prompt path defaults to skip when stdin is not a TTY (nohup, systemd-run safe).
+- **Exit codes:** 0 (success / dry-run), 1 (halt-on-failure), 2 (config / corrupt session), 3 (unknown pool), 4 (concurrent run).
+- 32 unit tests; full suite 535+ passing, coverage 82%.
+- Spec: [specs/2026-05-04-rolling-restart-phase3-design.md](specs/2026-05-04-rolling-restart-phase3-design.md) — 10 acceptance tests.
+- Plan: [plans/2026-05-04-rolling-restart-phase3.md](plans/2026-05-04-rolling-restart-phase3.md) — 8 tasks.
+- **Closes the 3-phase vllm lifecycle architecture** (Phase 1 v0.5.0 supervisor, Phase 2 v0.6.0 prune, Phase 3 v0.7.0 rolling-restart).
 
 ### 2026-05-04 — v0.6.0 lb prune (worker reaper, Phase 2 of 3)
 
