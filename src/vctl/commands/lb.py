@@ -177,6 +177,7 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         _spawn_watcher_if_enabled(mgr, cluster_yaml)
         return 0
     if verb == "stop":
+        _stop_watcher_if_running(mgr)
         mgr.stop()
         return 0
     if verb == "status":
@@ -217,6 +218,7 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
 
     from vctl.commands.lb_scaling import _client
     from vctl.lb.probe import fetch_vllm_metrics
+    from vctl.lb.prune import _watcher_status
 
     console: Console = _console if _console is not None else Console(force_terminal=False)
 
@@ -234,11 +236,14 @@ def _do_info(mgr: LbManager, bs: BackendState, _console: Console | None = None) 
     stats_url = f"http://{mgr.lb.host}:{mgr.lb.stats.bind_port}"
 
     admin_status = "(reachable)" if admin_reachable else "(unreachable)"
+    ws = _watcher_status(mgr)
+    watcher_state = str(ws["state"])
     proc_lines = [
         f"pid {pid}  alive={str(pid_alive).lower()}  admin={admin_bind} {admin_status}",
         f"tmux: {mgr.tmux_name}  is_local_host={str(is_local_host).lower()}",
         f"cfg: {cfg_path}",
         f"stats UI: {stats_url}",
+        f"watcher: {watcher_state}",
     ]
     if not lb_running:
         proc_lines.append("[bold red][LB STOPPED][/bold red]")
@@ -668,6 +673,20 @@ def _spawn_watcher_if_enabled(mgr: LbManager, cluster_yaml_path: Path) -> None:
         return
     _spawn_watcher(mgr, mgr.lb.prune, cluster_yaml_path)
     print("watcher started (session=vctl-lb-watch)", file=sys.stderr)
+
+
+def _stop_watcher_if_running(mgr: LbManager) -> None:
+    """Stop vctl-lb-watch watcher session before lb stop, if prune is enabled.
+
+    Only calls _stop_watcher when mgr.lb.prune.enabled is True — avoids
+    spurious tmux_kill invocations when the watcher is configured off.
+    """
+    from vctl.lb.prune import _stop_watcher
+
+    if not mgr.lb.prune.enabled:
+        return
+    _stop_watcher(mgr)
+    print("watcher stopped", file=sys.stderr)
 
 
 def _do_prune(mgr: LbManager, parsed: argparse.Namespace) -> int:

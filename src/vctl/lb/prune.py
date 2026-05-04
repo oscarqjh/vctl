@@ -30,13 +30,19 @@ from vctl.commands.lb import _fetch_haproxy_stats
 from vctl.duration import _parse_duration  # re-exported for callers
 from vctl.lb.errors import LbUnreachable
 from vctl.lb.runtime import lb_admin_client
-from vctl.platform import tmux_run_detached_argv
+from vctl.platform import tmux_kill, tmux_run_detached_argv, tmux_session_exists
 
 if TYPE_CHECKING:
     from vctl.config.models import LbPrune
     from vctl.lb.manager import LbManager
 
-__all__ = ["_collect_prune_candidates", "_parse_duration", "_spawn_watcher"]
+__all__ = [
+    "_collect_prune_candidates",
+    "_parse_duration",
+    "_spawn_watcher",
+    "_stop_watcher",
+    "_watcher_status",
+]
 
 
 def _collect_prune_candidates(
@@ -124,3 +130,48 @@ def _spawn_watcher(
     tmp = pid_path.with_suffix(".tmp")
     tmp.write_text("tmux:vctl-lb-watch\n")
     tmp.replace(pid_path)
+
+
+def _stop_watcher(mgr: LbManager) -> None:
+    """Kill the vctl-lb-watch tmux session and remove the sentinel pidfile.
+
+    Idempotent: safe to call even if the watcher was never started.
+    """
+    tmux_kill("vctl-lb-watch")
+    pid_path = mgr.run_dir / "watch.pid"
+    pid_path.unlink(missing_ok=True)
+
+
+def _watcher_status(mgr: LbManager) -> dict[str, object]:
+    """Return watcher liveness info for `vctl lb status` display.
+
+    Returns dict with keys:
+      - "enabled"       (bool) — mgr.lb.prune.enabled
+      - "session_alive" (bool) — tmux_session_exists("vctl-lb-watch")
+      - "pidfile_ok"    (bool) — pidfile present with correct sentinel
+      - "state"         (str)  — "running" | "not running" | "disabled"
+    """
+    enabled: bool = mgr.lb.prune.enabled
+    session_alive = tmux_session_exists("vctl-lb-watch")
+    pid_path = mgr.run_dir / "watch.pid"
+    pidfile_ok = False
+    if pid_path.exists():
+        try:
+            content = pid_path.read_text().strip()
+            pidfile_ok = content == "tmux:vctl-lb-watch"
+        except OSError:
+            pass
+
+    if not enabled:
+        state = "disabled"
+    elif session_alive:
+        state = "running"
+    else:
+        state = "not running"
+
+    return {
+        "enabled": enabled,
+        "session_alive": session_alive,
+        "pidfile_ok": pidfile_ok,
+        "state": state,
+    }
