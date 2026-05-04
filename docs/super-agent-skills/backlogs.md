@@ -2,12 +2,11 @@
 
 ## In Progress
 
-_(none — v0.5.0 shipped 2026-05-04)_
+_(none — v0.6.0 shipped 2026-05-04)_
 
 ## Up Next
 
-- **Phase 2: Worker reaper.** `vctl lb gc` command + optional background watcher tmux session. Auto-cleans dead-for-N-min backends from HAProxy + state file. Closes the pod-crash recovery gap surfaced in the vllm lifecycle brainstorm. Spec + plan needed.
-- **Phase 3: Rolling restart orchestration.** `vctl rolling-restart --pool <name>` — ssh-loops endpoints, drains → kills → restarts one at a time via `vctl serve restart` on each remote host. Builds on Phase 1's `VllmManager`. Spec + plan needed.
+- **Phase 3: Rolling restart orchestration.** `vctl rolling-restart --pool <name>` — ssh-loops endpoints, drains → kills → restarts one at a time via `vctl serve restart` on each remote host. Builds on Phase 1's `VllmManager` (shipped v0.5.0) + Phase 2's `lb prune` (shipped v0.6.0). Closes the last gap in the vllm lifecycle brainstorm. Spec + plan needed.
 - **Prometheus metrics endpoint** (`vctl lb metrics`).
 - **Multi-cluster support** (`~/.config/vctl/clusters/<name>.yaml` + `--cluster <name>`).
 
@@ -28,6 +27,18 @@ _(none — v0.5.0 shipped 2026-05-04)_
 - **F5** *(probably wontfix)*: emit `daemon` directive in `render.py` + redirect stdout log to a file. F1's pidfile/pgrep fallback already covers status/stop; tradeoff (lose interactive `tmux attach`) outweighs the marginal pidfile cleanliness gain.
 
 ## Completed
+
+### 2026-05-04 — v0.6.0 lb prune (worker reaper, Phase 2 of 3)
+
+- **`vctl lb prune`** — manual reaper. Removes backends DOWN > threshold (default 5m). Flags: `--threshold DURATION`, `--pool NAME`, `--dry-run`. Reuses `Reconciler.want_absent`. MAINT/DRAIN backends preserved. Exit 3 on unknown pool, 4 on LbUnreachable.
+- **Auto-watcher bundled into `vctl lb start/stop/status`** — when `cluster.lb.prune.enabled: true` (default), `lb start` spawns `vctl-lb-watch` tmux session running `bash -c 'while true; do vctl lb prune; sleep N; done'`. `lb stop` kills it idempotently. `lb status` reports state. Sentinel pidfile at `~/.vctl/lb/watch.pid`.
+- **`src/vctl/duration.py`** — new stdlib-only `_parse_duration` helper.
+- **`LbPrune` pydantic class** — `enabled`/`threshold`/`watch_interval` config under `lb.prune` in cluster.yaml. Backwards-compatible defaults.
+- **`docs/CLI-REFERENCE.md`** — new comprehensive command reference (279 lines, every command + flags + exit codes).
+- **`vctl serve --help`** now lists sub-verbs (status/stop/restart/console/logs) in the epilog. Each sub-verb's argparse has a description.
+- 501 unit tests passing (+12 net), coverage 81.6%.
+- Spec: [specs/2026-05-04-lb-prune-phase2-design.md](specs/2026-05-04-lb-prune-phase2-design.md) — 11 acceptance tests.
+- Plan: [plans/2026-05-04-lb-prune-phase2.md](plans/2026-05-04-lb-prune-phase2.md) — 7 tasks.
 
 ### 2026-05-04 — v0.5.0 VllmManager (tmux-backed vllm supervisor, Phase 1 of 3)
 
