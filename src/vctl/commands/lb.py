@@ -676,17 +676,16 @@ def _spawn_watcher_if_enabled(mgr: LbManager, cluster_yaml_path: Path) -> None:
 
 
 def _stop_watcher_if_running(mgr: LbManager) -> None:
-    """Stop vctl-lb-watch watcher session before lb stop, if prune is enabled.
+    """Stop vctl-lb-watch watcher session before lb stop.
 
-    Only calls _stop_watcher when mgr.lb.prune.enabled is True — avoids
-    spurious tmux_kill invocations when the watcher is configured off.
+    Always calls _stop_watcher regardless of prune.enabled — avoids zombie
+    session leaks when the operator toggles enabled=False after a running watcher.
+    Prints a message only if a session was actually killed.
     """
     from vctl.lb.prune import _stop_watcher
 
-    if not mgr.lb.prune.enabled:
-        return
-    _stop_watcher(mgr)
-    print("watcher stopped", file=sys.stderr)
+    if _stop_watcher(mgr):
+        print("watcher stopped", file=sys.stderr)
 
 
 def _do_prune(mgr: LbManager, parsed: argparse.Namespace) -> int:

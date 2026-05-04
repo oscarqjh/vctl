@@ -132,14 +132,17 @@ def _spawn_watcher(
     tmp.replace(pid_path)
 
 
-def _stop_watcher(mgr: LbManager) -> None:
+def _stop_watcher(mgr: LbManager) -> bool:
     """Kill the vctl-lb-watch tmux session and remove the sentinel pidfile.
 
+    Returns True if a watcher session was killed; False if nothing to do.
     Idempotent: safe to call even if the watcher was never started.
     """
+    was_running = tmux_session_exists("vctl-lb-watch")
     tmux_kill("vctl-lb-watch")
     pid_path = mgr.run_dir / "watch.pid"
     pid_path.unlink(missing_ok=True)
+    return was_running
 
 
 def _watcher_status(mgr: LbManager) -> dict[str, object]:
@@ -152,6 +155,8 @@ def _watcher_status(mgr: LbManager) -> dict[str, object]:
       - "state"         (str)  — "running" | "not running" | "disabled"
     """
     enabled: bool = mgr.lb.prune.enabled
+    if not enabled:
+        return {"state": "disabled", "enabled": False, "session_alive": False, "pidfile_ok": False}
     session_alive = tmux_session_exists("vctl-lb-watch")
     pid_path = mgr.run_dir / "watch.pid"
     pidfile_ok = False
@@ -162,15 +167,10 @@ def _watcher_status(mgr: LbManager) -> dict[str, object]:
         except OSError:
             pass
 
-    if not enabled:
-        state = "disabled"
-    elif session_alive:
-        state = "running"
-    else:
-        state = "not running"
+    state = "running" if session_alive else "not running"
 
     return {
-        "enabled": enabled,
+        "enabled": True,
         "session_alive": session_alive,
         "pidfile_ok": pidfile_ok,
         "state": state,

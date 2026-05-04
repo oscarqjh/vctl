@@ -408,7 +408,7 @@ vctl lb stop
 | Condition | Exit code | Message |
 |---|---|---|
 | HAProxy admin socket unreachable | 4 | `LbUnreachable: <detail>` |
-| Unknown pool name (`--pool`) | 1 | `PoolNotFound: <detail>` |
+| Unknown pool name (`--pool`) | 3 | `unknown pool: <name>; available: <list>` (exit 3 matches the pool-routing convention used by `lb_scaling._exit_for`) |
 | Invalid threshold/interval string | 1 | `invalid duration: '<value>'` |
 | `want_absent` fails (BackendOpFailed) | 1 | `backend op failed: <detail>` |
 | watcher already running (session exists at `lb start` time) | logged warning, non-fatal | `watcher already running — skipping spawn` |
@@ -478,7 +478,7 @@ Key test cases:
 - `test_prune_skips_up` — ep status UP → not pruned regardless of lastchg.
 - `test_prune_lb_unreachable_exit4` — `lb_admin_client` returns None → exit 4.
 - `test_prune_invalid_threshold_exit1` — `--threshold bad` → exit 1.
-- `test_prune_unknown_pool_exit1` — `--pool nonexistent` → exit 1.
+- `test_prune_unknown_pool_exit3` — `--pool nonexistent` → exit 3.
 
 **`tests/test_commands_lb.py`** (existing file) — extend with watcher integration tests:
 

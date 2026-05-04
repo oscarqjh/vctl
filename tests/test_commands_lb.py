@@ -109,11 +109,13 @@ def test_lb_stop_kills_watcher_session(tmp_path: Path, monkeypatch: pytest.Monke
 
     killed: list[str] = []
     monkeypatch.setattr("vctl.lb.prune.tmux_kill", lambda name: killed.append(name))
+    monkeypatch.setattr("vctl.lb.prune.tmux_session_exists", lambda name: True)
 
     from vctl.lb.prune import _stop_watcher
 
-    _stop_watcher(mgr)
+    was_killed = _stop_watcher(mgr)
 
+    assert was_killed is True
     assert "vctl-lb-watch" in killed
     assert not watch_pid.exists()
 
@@ -121,15 +123,17 @@ def test_lb_stop_kills_watcher_session(tmp_path: Path, monkeypatch: pytest.Monke
 def test_lb_stop_watcher_idempotent_when_not_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """_stop_watcher when nothing running → no error, exit cleanly."""
+    """_stop_watcher when nothing running → no error, exit cleanly, returns False."""
     lb = _make_lb()
     mgr = _make_mgr(tmp_path, lb=lb)
 
     monkeypatch.setattr("vctl.lb.prune.tmux_kill", lambda name: None)
+    monkeypatch.setattr("vctl.lb.prune.tmux_session_exists", lambda name: False)
 
     from vctl.lb.prune import _stop_watcher
 
-    _stop_watcher(mgr)  # must not raise
+    was_killed = _stop_watcher(mgr)  # must not raise
+    assert was_killed is False
 
 
 def test_lb_status_reports_watcher_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,3 +169,20 @@ def test_lb_status_reports_watcher_disabled(
 
     assert result["state"] == "disabled"
     assert result["enabled"] is False
+
+
+def test_lb_status_reports_watcher_not_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """enabled=True but session absent → state='not running'."""
+    lb = _make_lb(prune=LbPrune(enabled=True))
+    mgr = _make_mgr(tmp_path, lb=lb)
+
+    monkeypatch.setattr("vctl.lb.prune.tmux_session_exists", lambda name: False)
+
+    from vctl.lb.prune import _watcher_status
+
+    result = _watcher_status(mgr)
+
+    assert result["state"] == "not running"
+    assert result["enabled"] is True
