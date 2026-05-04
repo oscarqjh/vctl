@@ -7,9 +7,10 @@ import fcntl
 import json
 import os
 import subprocess  # noqa: F401  (module-level for monkeypatching in later tasks)
+import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from vctl.commands.lb import _fetch_haproxy_stats
 from vctl.lb.runtime import lb_admin_client
@@ -109,3 +110,89 @@ def _verify_ep_up(
                 break
         time.sleep(1)
     return False
+
+
+def _restart_one_ep(
+    ep: str,
+    idx: int,
+    total: int,
+    pool_name: str,
+    mgr: LbManager,
+    ssh_user: str,
+    vllm_timeout: int,
+    ready_timeout: int,
+    dry_run: bool,
+    quiet: bool,
+    remote_vctl_path: str | None,
+) -> Literal["ok", "failed"]:
+    """Restart a single endpoint via ssh and verify it returns UP in HAProxy.
+
+    Returns "ok" on success, "failed" on ssh error, ssh timeout, or health-check
+    timeout. All progress + error output goes to stderr (stdout stays clean).
+    """
+    ep_host = ep.split(":")[0]
+    prefix = f"[{idx}/{total}] {ep}"
+
+    if not quiet:
+        print(f"{prefix}  draining → restarting...", file=sys.stderr)
+
+    if dry_run:
+        print(f"{prefix}  would restart", file=sys.stderr)
+        return "ok"
+
+    # Build ssh target and remote command.
+    ssh_target = f"{ssh_user}@{ep_host}" if ssh_user else ep_host
+    if remote_vctl_path:
+        remote_cmd = f"{remote_vctl_path} serve restart"
+    else:
+        remote_cmd = "bash -lc 'vctl serve restart'"
+
+    argv = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        ssh_target,
+        remote_cmd,
+    ]
+
+    try:
+        result = subprocess.run(
+            argv,
+            timeout=vllm_timeout,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"{prefix}  timed out after {vllm_timeout}s. HALTING.",
+            file=sys.stderr,
+        )
+        return "failed"
+
+    if result.returncode != 0:
+        stderr_snippet = result.stderr.strip()[:200]
+        print(
+            f"{prefix}  ssh failed (rc={result.returncode}): {stderr_snippet}. HALTING.",
+            file=sys.stderr,
+        )
+        return "failed"
+
+    if not quiet:
+        print(f"{prefix}  waiting for UP...", file=sys.stderr)
+
+    t0 = time.monotonic()
+    if not _verify_ep_up(ep, pool_name, mgr, timeout_s=ready_timeout):
+        print(
+            f"{prefix}  did not become UP within {ready_timeout}s. HALTING.",
+            file=sys.stderr,
+        )
+        return "failed"
+
+    elapsed = int(time.monotonic() - t0)
+    if not quiet:
+        print(f"{prefix}  ready ({elapsed}s)", file=sys.stderr)
+    return "ok"
