@@ -96,20 +96,24 @@ class VllmManager:
                 "use `vctl serve restart` to restart or `vctl serve stop` to stop."
             )
 
-        # Build vllm argv (mirrors _run_foreground).
-        env = os.environ.copy()
-        venv_bin = str(Path(rc.cluster.venv) / "bin")
-        env["PATH"] = f"{venv_bin}:{env['PATH']}"
+        # Build vllm argv. Use absolute path to vllm because tmux session
+        # does NOT inherit the operator's PATH — the tmux server has its
+        # own minimal env, so plain "vllm" would fail with `command not
+        # found` (the v0.5.0/0.5.3 supervisor regression).
+        vllm_bin = str(Path(rc.cluster.venv) / "bin" / "vllm")
+
+        # Env overrides that vllm needs (CUDA_VISIBLE_DEVICES + profile env).
+        env_overrides: dict[str, str] = {}
         if rc.resources.cuda_visible_devices:
-            env["CUDA_VISIBLE_DEVICES"] = rc.resources.cuda_visible_devices
+            env_overrides["CUDA_VISIBLE_DEVICES"] = rc.resources.cuda_visible_devices
         for k, v in rc.env.items():
             if isinstance(v, bool):
-                env[k] = "true" if v else "false"
+                env_overrides[k] = "true" if v else "false"
             else:
-                env[k] = str(v)
+                env_overrides[k] = str(v)
 
         argv: list[str] = [
-            "vllm",
+            vllm_bin,
             "serve",
             rc.model.name,
             f"--data-parallel-size={rc.parallelism.data_parallel}",
@@ -139,8 +143,16 @@ class VllmManager:
             else:
                 argv.append(f"--{k}={v}")
 
+        # Wrap argv in `env K=V ... <argv>` so env_overrides take effect inside
+        # the tmux session. `env(1)` is on every PATH and accepts inline
+        # KEY=VALUE pairs followed by the command + args.
+        env_cmd: list[str] = ["env"]
+        for k, v in env_overrides.items():
+            env_cmd.append(f"{k}={v}")
+        env_cmd.extend(argv)
+
         # Spawn the tmux session.
-        tmux_run_detached_argv(self.session_name, argv)
+        tmux_run_detached_argv(self.session_name, env_cmd)
         _LOG.info("vllm started in tmux session %s", self.session_name)
 
         # Set up pipe-pane log capture BEFORE any failure point so we capture early output.
@@ -309,9 +321,10 @@ class VllmManager:
             except (json.JSONDecodeError, OSError):
                 old_argv = []
 
-            # Compute what the current rc would produce.
+            # Compute what the current rc would produce. Must match start()'s argv
+            # exactly — including the absolute vllm path — for drift detection.
             new_argv: list[str] = [
-                "vllm",
+                str(Path(rc.cluster.venv) / "bin" / "vllm"),
                 "serve",
                 rc.model.name,
                 f"--data-parallel-size={rc.parallelism.data_parallel}",
