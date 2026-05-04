@@ -4,9 +4,11 @@
 
 Phase 2 adds `vctl lb prune`, a manual command that scans all pools (or one named
 pool) and removes backends whose HAProxy health status is DOWN and whose `lastchg`
-(seconds continuously in that state) exceeds a configurable threshold. A companion
-`vctl lb watch` sub-group runs `prune` on a background timer in a dedicated tmux
-session (`vctl-lb-watch`), fully separate from the HAProxy session (`vctl-lb`).
+(seconds continuously in that state) exceeds a configurable threshold. An
+auto-watcher is bundled directly into `vctl lb start/stop/status`: when
+`cluster.lb.prune.enabled: true` (the default), `vctl lb start` also spawns a
+background prune loop in tmux session `vctl-lb-watch` alongside the HAProxy session
+(`vctl-lb`). There is no separate `vctl lb watch` sub-command group.
 The feature targets cluster operators who currently have to manually spot dead
 vllm workers via `vctl lb status` and issue individual `vctl lb remove` calls.
 
@@ -21,12 +23,15 @@ vllm workers via `vctl lb status` and issue individual `vctl lb remove` calls.
    without mutating HAProxy or the state file.
 5. Backends in MAINT or DRAIN admin-state are NEVER pruned regardless of `lastchg`.
 6. UP backends are never pruned.
-7. `vctl lb watch start` creates tmux session `vctl-lb-watch`, writes a pidfile at
-   `~/.vctl/lb/watch.pid`, and exits 0.
-8. `vctl lb watch stop` kills the `vctl-lb-watch` tmux session and removes the
-   pidfile.
-9. `vctl lb watch status` exits 0 with a human-readable summary when the watcher is
-   running; exits non-zero when it is not.
+7. `vctl lb start` with `prune.enabled: true` spawns BOTH the `vctl-lb` HAProxy
+   session AND the `vctl-lb-watch` watcher session; writes a sentinel pidfile at
+   `~/.vctl/lb/watch.pid`; exits 0.
+7b. `vctl lb start` with `prune.enabled: false` spawns ONLY the `vctl-lb` HAProxy
+    session; does NOT spawn `vctl-lb-watch`; does NOT write `watch.pid`; exits 0.
+8. `vctl lb stop` kills BOTH `vctl-lb` and `vctl-lb-watch` tmux sessions; removes
+   `~/.vctl/lb/watch.pid`; exits 0.
+9. `vctl lb status` reports both the HAProxy state and the watcher state (running /
+   not running / disabled).
 10. `mypy --strict`, `ruff check`, `ruff format --check`, and
     `pytest --cov-fail-under=50` all pass after this change.
 
@@ -83,6 +88,7 @@ New optional subfield on `LbHaproxy`:
 
 ```python
 class LbPrune(_Strict):
+    enabled: bool = True        # set false to disable auto-watcher on lb start
     threshold: str = "5m"       # minimum DOWN duration before pruning
     watch_interval: str = "30s" # period between watcher iterations
 
@@ -236,72 +242,104 @@ Handler `_do_prune(mgr, parsed) -> int` in `commands/lb.py`:
 7. Catch `BackendOpFailed` → print to stderr, return 1.
 8. Return 0 on full success.
 
-### 5. `vctl lb watch` sub-group — `commands/lb.py`
+### 5. Watcher helpers — `lb/prune.py`
 
-`watch` is a new top-level verb dispatched inside the existing `run()` function.
-It takes a sub-verb (`start` / `stop` / `status`) as its first positional argument.
+Three new functions live in `src/vctl/lb/prune.py` so `commands/lb.py` does not get
+bloated. They are imported locally (inside the verb handlers) to keep the cold-import path
+light.
 
-Add to `_build_subparser()`:
+#### `_spawn_watcher(mgr, prune_cfg, cluster_yaml_path)` — `lb/prune.py`
 
 ```python
-watch = sp.add_parser("watch", help="Background prune loop in tmux session vctl-lb-watch")
-watch_sp = watch.add_subparsers(dest="watch_verb", required=True)
-ws = watch_sp.add_parser("start", help="Start background prune watcher")
-ws.add_argument("--interval", default=None, metavar="DURATION",
-                help="override watch interval, e.g. 30s, 2m (default: cluster.lb.prune.watch_interval)")
-ws.add_argument("--pool", default=None, help="scope watcher to one pool")
-ws.add_argument("--threshold", default=None, metavar="DURATION")
-watch_sp.add_parser("stop", help="Stop background prune watcher")
-watch_sp.add_parser("status", help="Show watcher session state")
+def _spawn_watcher(
+    mgr: LbManager,
+    prune_cfg: LbPrune,
+    cluster_yaml_path: Path,
+) -> None:
 ```
 
-#### `watch start` (`_do_watch_start`)
+1. Build `inner_argv`: `[sys.executable, "-m", "vctl", "--config", str(cluster_yaml_path), "lb", "prune"]`.
+2. Resolve `interval_s = _parse_duration(prune_cfg.watch_interval)`.
+3. Build `loop_cmd = f"while true; do {shlex.join(inner_argv)}; sleep {interval_s}; done"`.
+4. Call `tmux_run_detached_argv("vctl-lb-watch", ["bash", "-c", loop_cmd])`.
+5. Write pidfile `~/.vctl/lb/watch.pid` (i.e. `mgr.run_dir / "watch.pid"`) atomically
+   (`.tmp` + `os.replace`) with content `tmux:vctl-lb-watch\n`.
 
-1. Validate `is_host()` — refuse with exit 1 + message if not LB host.
-2. Check `tmux_session_exists("vctl-lb-watch")` — refuse start if already running.
-3. Resolve and validate interval: flag → `mgr.lb.prune.watch_interval` → `"30s"`.
-4. Build `argv` for the loop body:
-   ```python
-   argv = [
-       sys.executable, "-m", "vctl", "--config", str(cluster_yaml_path),
-       "lb", "prune",
-   ]
-   if pool: argv += ["--pool", pool]
-   if threshold: argv += ["--threshold", threshold]
-   ```
-   The watcher is a shell `while true; do ...; sleep N; done` launched via
-   `tmux_run_detached_argv("vctl-lb-watch", ["bash", "-c", loop_cmd])`.
-   `loop_cmd` is constructed as:
-   ```python
-   loop_cmd = (
-       f"while true; do {shlex.join(argv)}; sleep {interval_s}; done"
-   )
-   ```
-5. Call `tmux_run_detached_argv("vctl-lb-watch", ["bash", "-c", loop_cmd])`.
-6. Write pidfile `~/.vctl/lb/watch.pid` atomically (`.tmp` + `os.replace`) with content:
-   ```
-   tmux:vctl-lb-watch
-   ```
-   Plain text, single line. The string `tmux:<session_name>` is a sentinel — `watch status`
-   reads the pidfile, splits on `:`, verifies the session name matches `vctl-lb-watch`,
-   then calls `tmux_session_exists` to confirm liveness. This sentinel format is
-   deliberately not a numeric PID because tmux's pane PID is not a meaningful supervision
-   target (the bash loop is what we want to track, but its PID is unstable across shell
-   exec'ing the inner `vctl lb prune` subprocess each iteration).
-7. Return 0.
+The string `tmux:<session_name>` is a sentinel — `_watcher_status` reads the pidfile,
+verifies the session name matches `vctl-lb-watch`, then calls `tmux_session_exists` to
+confirm liveness. This sentinel format is deliberately not a numeric PID because tmux's
+pane PID is unstable across shell exec'ing the inner `vctl lb prune` subprocess each
+iteration.
 
-#### `watch stop` (`_do_watch_stop`)
+#### `_stop_watcher(mgr)` — `lb/prune.py`
 
-1. `tmux_kill("vctl-lb-watch")` — idempotent.
-2. Remove `~/.vctl/lb/watch.pid` if it exists.
-3. Return 0.
+```python
+def _stop_watcher(mgr: LbManager) -> None:
+```
 
-#### `watch status` (`_do_watch_status`)
+1. `tmux_kill("vctl-lb-watch")` — idempotent (no error if session absent).
+2. Remove `mgr.run_dir / "watch.pid"` if it exists.
 
-1. Check `tmux_session_exists("vctl-lb-watch")` and pidfile presence.
-2. If both: print `watcher running (session=vctl-lb-watch)`; return 0.
-3. If session exists but no pidfile: print `watcher running (no pidfile)`; return 0.
-4. Otherwise: print `watcher not running`; return 1.
+#### `_watcher_status(mgr) -> dict[str, object]` — `lb/prune.py`
+
+```python
+def _watcher_status(mgr: LbManager) -> dict[str, object]:
+```
+
+Returns a dict with keys:
+- `"enabled"` (`bool`) — `mgr.lb.prune.enabled`
+- `"session_alive"` (`bool`) — `tmux_session_exists("vctl-lb-watch")`
+- `"pidfile_ok"` (`bool`) — pidfile present and contains `tmux:vctl-lb-watch`
+- `"state"` (`str`) — `"running"` / `"not running"` / `"disabled"`
+
+When `enabled` is `False`, `state` is `"disabled"` regardless of session liveness.
+
+### 6. `lb start / stop / status` integration — `commands/lb.py`
+
+No new top-level verbs. Three existing handlers are extended:
+
+#### `_do_start` hook — call `_spawn_watcher_if_enabled(mgr, cluster_yaml_path)` AFTER `mgr.start()` succeeds
+
+```python
+def _spawn_watcher_if_enabled(mgr: LbManager, cluster_yaml_path: Path) -> None:
+    """Spawn vctl-lb-watch watcher session if prune.enabled is True."""
+    from vctl.lb.prune import _spawn_watcher
+    if mgr.lb.prune.enabled:
+        _spawn_watcher(mgr, mgr.lb.prune, cluster_yaml_path)
+```
+
+Called at the end of `_do_start` after a successful `mgr.start()`. If `prune.enabled` is
+`False`, the watcher is silently skipped and only the HAProxy session is started.
+
+#### `_do_stop` hook — call `_stop_watcher_if_running(mgr)` BEFORE `mgr.stop()`
+
+```python
+def _stop_watcher_if_running(mgr: LbManager) -> None:
+    """Stop vctl-lb-watch watcher session if it is running."""
+    from vctl.lb.prune import _stop_watcher
+    _stop_watcher(mgr)  # idempotent — safe even if watcher is not running
+```
+
+Called at the start of `_do_stop` before `mgr.stop()`. Idempotent: if the watcher was
+never started (e.g. `prune.enabled: false`), `tmux_kill` is a no-op and missing pidfile is
+silently ignored.
+
+#### `_do_status` (formerly `_do_info`) hook — add "watcher:" row
+
+`_watcher_status(mgr)` is called inside `_do_status` and its result is rendered alongside
+the existing HAProxy status rows. The display format:
+
+```
+watcher:  running (session=vctl-lb-watch)
+```
+or:
+```
+watcher:  not running
+```
+or:
+```
+watcher:  disabled (prune.enabled: false)
+```
 
 ---
 
@@ -332,19 +370,35 @@ vctl lb prune [--pool P] [--threshold T] [--dry-run]
   └─ return 0
 ```
 
-### `watch start` sequence
+### `lb start` with watcher sequence
 
 ```
-vctl lb watch start [--interval I] [--pool P] [--threshold T]
+vctl lb start
   │
-  ├─ is_host() check → exit 1 if not LB host
-  ├─ tmux_session_exists("vctl-lb-watch") → exit 1 if already running
-  ├─ resolve interval (flag → yaml → "30s")
-  ├─ build loop_cmd:
-  │    "while true; do python -m vctl lb prune [...flags]; sleep N; done"
-  ├─ tmux_run_detached_argv("vctl-lb-watch", ["bash", "-c", loop_cmd])
-  ├─ write ~/.vctl/lb/watch.pid
-  └─ return 0
+  ├─ mgr.start()  →  HAProxy launched in tmux session "vctl-lb"
+  │
+  └─ _spawn_watcher_if_enabled(mgr, cluster_yaml_path)
+       │
+       ├─ if prune.enabled == False → skip (no watcher session spawned)
+       │
+       └─ if prune.enabled == True:
+            ├─ resolve interval_s from prune.watch_interval
+            ├─ build loop_cmd:
+            │    "while true; do python -m vctl lb prune; sleep N; done"
+            ├─ tmux_run_detached_argv("vctl-lb-watch", ["bash", "-c", loop_cmd])
+            └─ write ~/.vctl/lb/watch.pid  (sentinel: "tmux:vctl-lb-watch")
+```
+
+### `lb stop` with watcher sequence
+
+```
+vctl lb stop
+  │
+  ├─ _stop_watcher_if_running(mgr)
+  │    ├─ tmux_kill("vctl-lb-watch")  (idempotent)
+  │    └─ remove ~/.vctl/lb/watch.pid  (if exists)
+  │
+  └─ mgr.stop()  →  HAProxy tmux session "vctl-lb" killed
 ```
 
 ---
@@ -357,8 +411,7 @@ vctl lb watch start [--interval I] [--pool P] [--threshold T]
 | Unknown pool name (`--pool`) | 1 | `PoolNotFound: <detail>` |
 | Invalid threshold/interval string | 1 | `invalid duration: '<value>'` |
 | `want_absent` fails (BackendOpFailed) | 1 | `backend op failed: <detail>` |
-| `watch start` on non-LB host | 1 | `this host is not the LB host; refusing to start watcher` |
-| `watch start` when already running | 1 | `watcher already running (session=vctl-lb-watch)` |
+| watcher already running (session exists at `lb start` time) | logged warning, non-fatal | `watcher already running — skipping spawn` |
 | Generic unexpected exception | 1 | exception repr to stderr |
 
 All error messages go to `sys.stderr`. Exit 0 is reserved for full success (including
@@ -427,21 +480,24 @@ Key test cases:
 - `test_prune_invalid_threshold_exit1` — `--threshold bad` → exit 1.
 - `test_prune_unknown_pool_exit1` — `--pool nonexistent` → exit 1.
 
-**`tests/test_commands_lb_watch.py`** — unit tests for `vctl lb watch` sub-verbs:
+**`tests/test_commands_lb.py`** (existing file) — extend with watcher integration tests:
 
-Use `monkeypatch` on `tmux_session_exists`, `tmux_run_detached_argv`, `tmux_kill`,
-and `LbManager.is_host`. All tests run without a real tmux binary.
+Use `monkeypatch` on `tmux_session_exists`, `tmux_run_detached_argv`, `tmux_kill`.
+All tests run without a real tmux binary.
 
-Key test cases:
-- `test_watch_start_creates_session_and_pidfile` — `is_host` returns True,
-  `session_exists` returns False → `tmux_run_detached_argv` called once with
-  `vctl-lb-watch`; pidfile written.
-- `test_watch_start_refuses_non_lb_host` — `is_host` returns False → exit 1.
-- `test_watch_start_refuses_already_running` — `session_exists` returns True → exit 1.
-- `test_watch_stop_kills_session_removes_pidfile` — `tmux_kill` called once;
-  pidfile removed.
-- `test_watch_status_running` — session exists + pidfile present → exit 0.
-- `test_watch_status_not_running` — session absent → exit 1.
+Key test cases added in Tasks 5 and 6:
+- `test_lb_start_spawns_watcher_when_enabled` — `prune.enabled=True` →
+  `tmux_run_detached_argv` called with session `vctl-lb-watch`; pidfile written.
+- `test_lb_start_skips_watcher_when_disabled` — `prune.enabled=False` →
+  `tmux_run_detached_argv` NOT called with `vctl-lb-watch`; no pidfile.
+- `test_lb_stop_kills_both_sessions` — `tmux_kill` called for both `vctl-lb` and
+  `vctl-lb-watch`; pidfile removed.
+- `test_lb_status_reports_watcher_running` — session alive + pidfile present →
+  output contains `watcher: running`.
+- `test_lb_status_reports_watcher_not_running` — watcher session absent →
+  output contains `watcher: not running`.
+- `test_lb_status_reports_watcher_disabled` — `prune.enabled=False` →
+  output contains `watcher: disabled`.
 
 ### Mocking pattern (mirrors existing tests)
 
@@ -472,8 +528,9 @@ lb:
   kind: haproxy
   # ... existing fields ...
   prune:                  # NEW optional block; omit = use all defaults
+    enabled: true         # set false to disable auto-watcher on lb start
     threshold: 5m         # minimum DOWN duration before a backend is eligible
-    watch_interval: 30s   # polling interval for `vctl lb watch`
+    watch_interval: 30s   # polling interval for the auto-watcher loop
 ```
 
 The `prune` block is optional. Omitting it (all existing cluster.yaml files) uses
@@ -483,13 +540,14 @@ The `prune` block is optional. Omitting it (all existing cluster.yaml files) use
 
 ```python
 class LbPrune(_Strict):
+    enabled: bool = True
     threshold: str = "5m"
     watch_interval: str = "30s"
 
     @field_validator("threshold", "watch_interval", mode="after")
     @classmethod
     def _valid_duration(cls, v: str) -> str:
-        from vctl.lb.prune import _parse_duration  # lazy import avoids circular
+        from vctl.duration import _parse_duration  # lazy import avoids circular
         _parse_duration(v)
         return v
 
@@ -503,12 +561,12 @@ prune: LbPrune = Field(default_factory=LbPrune)
 
 | File | Change |
 |---|---|
-| `src/vctl/config/models.py` | Add `LbPrune` class; add `prune` field to `LbHaproxy` |
-| `src/vctl/lb/prune.py` | New module: `_parse_duration`, `_collect_prune_candidates` |
-| `src/vctl/commands/lb.py` | Add `prune` + `watch` verbs; add `_do_prune`, `_do_watch_start`, `_do_watch_stop`, `_do_watch_status` |
-| `tests/test_lb_prune_helpers.py` | New: `_parse_duration` unit tests |
+| `src/vctl/config/models.py` | Add `LbPrune` class (with `enabled` field); add `prune` field to `LbHaproxy` |
+| `src/vctl/lb/prune.py` | New module: `_parse_duration`, `_collect_prune_candidates`, `_spawn_watcher`, `_stop_watcher`, `_watcher_status` |
+| `src/vctl/commands/lb.py` | Add `prune` verb; extend `_do_start`/`_do_stop`/`_do_status` with watcher hooks |
+| `tests/test_duration.py` | New: `_parse_duration` unit tests |
 | `tests/test_commands_lb_prune.py` | New: prune cmd tests |
-| `tests/test_commands_lb_watch.py` | New: watch sub-verb tests |
+| `tests/test_commands_lb.py` | Extend: watcher integration tests for start/stop/status |
 | `examples/cluster_template.yaml` | Add `prune:` block (commented) |
 | `CHANGELOG.md` | v0.6.0 entry |
 | `pyproject.toml` | Bump version `0.5.3` → `0.6.0` |
@@ -529,7 +587,7 @@ a profile-aware command).
   no new locking primitives.
 - Write to `sys.stderr` for per-removal output and error messages.
 - Validate `--threshold` and `--interval` at parse time, not lazily.
-- Refuse `watch start` on non-LB hosts.
+- Skip watcher spawn silently (log only) when the watcher session is already running at `lb start` time.
 
 ### Ask first
 
@@ -545,8 +603,8 @@ a profile-aware command).
 - Skip the `set_state maint` step before `del server` (haproxy contract).
 - Reuse a single `RuntimeClient` across multiple admin commands.
 - Write to the state file before HAProxy acknowledges the removal.
-- Create a new tmux session named `vctl-lb` (reserved for haproxy); watcher must
-  use `vctl-lb-watch`.
+- Create a new tmux session named `vctl-lb` (reserved for haproxy); watcher always uses `vctl-lb-watch`.
+- Add a `vctl lb watch` sub-command group — watcher lifecycle is bundled into `lb start/stop/status`.
 - Cross-host prune (SSH to another node to run the admin command) — Phase 3 only.
 - Auto-revive pruned backends — Phase 3 only.
 
@@ -589,24 +647,33 @@ Given a backend with `status=DOWN`, `admin=drain`, `lastchg=3600`;
 When `vctl lb prune` is invoked;
 Then `want_absent` is NOT called; exit 0 with zero pruned.
 
-**AT-7** (SC-7 — watch start creates session and pidfile)
-Given `LbManager.is_host()` returns True and no watcher session exists;
-When `vctl lb watch start` is invoked;
-Then `tmux_run_detached_argv` is called with session name `vctl-lb-watch`;
-`~/.vctl/lb/watch.pid` is created; exit 0.
+**AT-7** (SC-7 — `lb start` with watcher enabled spawns both sessions)
+Given `prune.enabled: true` (default) in cluster.yaml;
+When `vctl lb start` is invoked and `mgr.start()` succeeds;
+Then `tmux_run_detached_argv` is called with session name `vctl-lb-watch` (in addition to
+the HAProxy session `vctl-lb`); `~/.vctl/lb/watch.pid` is created with content
+`tmux:vctl-lb-watch`; exit 0.
 
-**AT-8** (SC-8 — watch stop cleans up)
-Given the watcher session `vctl-lb-watch` is running and `watch.pid` exists;
-When `vctl lb watch stop` is invoked;
-Then `tmux_kill("vctl-lb-watch")` is called; `watch.pid` is removed; exit 0.
+**AT-7b** (SC-7b — `lb start` with watcher disabled spawns only HAProxy)
+Given `prune.enabled: false` in cluster.yaml;
+When `vctl lb start` is invoked and `mgr.start()` succeeds;
+Then `tmux_run_detached_argv` is NOT called with session name `vctl-lb-watch`;
+no `watch.pid` is written; exit 0.
 
-**AT-9** (SC-9 — watch status reflects liveness)
+**AT-8** (SC-8 — `lb stop` kills both sessions)
+Given the HAProxy session `vctl-lb` and watcher session `vctl-lb-watch` are running,
+and `watch.pid` exists;
+When `vctl lb stop` is invoked;
+Then `tmux_kill("vctl-lb-watch")` is called; `watch.pid` is removed;
+`tmux_kill("vctl-lb")` is also called (or `mgr.stop()` equivalent); exit 0.
+
+**AT-9** (SC-9 — `lb status` reports watcher state)
 Given the watcher session exists and `watch.pid` is present;
-When `vctl lb watch status` is invoked;
-Then exit 0 and stderr/stdout contains `watcher running`.
-Given neither the session nor pidfile exists;
-When `vctl lb watch status` is invoked;
-Then exit 1 and output contains `watcher not running`.
+When `vctl lb status` is invoked;
+Then output contains `watcher: running` (or equivalent); exit 0.
+Given `prune.enabled: false`;
+When `vctl lb status` is invoked;
+Then output contains `watcher: disabled`; exit 0.
 
 **AT-10** (SC-10 — CI gates pass)
 Given the full changeset from this spec is implemented;
@@ -623,6 +690,8 @@ Then all four commands exit 0 with no errors or warnings.
 - Auto-revive: re-spawn a pruned vllm worker on a healthy node.
 - Watcher alerting (PagerDuty / Slack hook on N pruned in window).
 - `vctl lb prune --force` to prune MAINT backends (deliberate operator override).
+- A standalone `vctl lb watch start/stop/status` sub-command group — watcher lifecycle
+  is intentionally bundled into `lb start/stop/status` for simplicity.
 
 ---
 
