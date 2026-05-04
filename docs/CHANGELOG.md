@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.5.5] - 2026-05-04
+
+### Added
+
+- **`vctl serve logs --prune`** — trim the log file in place, keeping the last N lines (`--keep N`, default 10000) or wiping entirely (`--all`). Uses `open("r+") + seek + write + truncate` to preserve the inode, so tmux pipe-pane's open file descriptor keeps writing to the same file and the operator continues to see new lines after the prune. No vllm restart needed.
+- **`--prune` and `--follow` are mutually exclusive**; `--all` requires `--prune` (argparse-level rejection, exit 2).
+
+### Fixed
+
+- **Defensive cleanup on PID-discovery timeout in `VllmManager.start()`**. Previously the timeout branch only called `tmux_kill`; now it calls the full `_cleanup_on_failure()` (kill session + unlink pid/cmd/host). State files weren't written at that point in current code so this was a no-op, but the explicit cleanup makes the path resilient if write order ever changes.
+
 ## [0.5.4] - 2026-05-04
 
 ### Fixed

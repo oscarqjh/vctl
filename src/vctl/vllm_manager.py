@@ -179,7 +179,7 @@ class VllmManager:
             time.sleep(_VLLM_PID_POLL_INTERVAL)
 
         if pid is None:
-            tmux_kill(self.session_name)
+            self._cleanup_on_failure()
             raise RuntimeError(
                 f"vllm PID discovery timed out after {_VLLM_PID_POLL_TIMEOUT}s "
                 f"for profile {rc.profile_name!r} on port {port}; "
@@ -434,8 +434,28 @@ class VllmManager:
             )
         os.execvp("tmux", ["tmux", "attach-session", "-t", self.session_name])
 
-    def logs(self, n: int = 50, follow: bool = False) -> int:
-        """Tail log file. follow=True: subprocess.Popen(["tail", "-f", path])."""
+    def logs(
+        self,
+        n: int = 50,
+        follow: bool = False,
+        prune: bool = False,
+        keep: int = 10000,
+        prune_all: bool = False,
+    ) -> int:
+        """Tail log file, or prune it in-place.
+
+        Modes (precedence: prune > follow > default tail):
+        - prune=True, prune_all=True  → truncate file to 0 bytes (wipe all logs).
+        - prune=True, prune_all=False → keep last `keep` lines, rewriting in-place.
+        - follow=True                 → stream new lines via tail -f.
+        - default                     → print last `n` lines.
+
+        Prune uses open("r+") + seek + write + truncate to preserve the inode so
+        tmux pipe-pane's open file descriptor keeps writing to the same file after
+        the prune — the operator continues to see new lines without a restart.
+
+        NOTE: prune and follow are mutually exclusive; --all requires --prune.
+        """
         import sys as _sys
 
         if not self.log_path.exists():
@@ -445,6 +465,37 @@ class VllmManager:
                 file=_sys.stderr,
             )
             return 1
+
+        if prune:
+            if prune_all:
+                # Truncate to 0 bytes in-place: preserves inode so tmux pipe-pane fd
+                # keeps writing to the same file after the prune.
+                with self.log_path.open("w"):
+                    pass
+                print(f"pruned {self.log_path}: removed everything")
+                return 0
+
+            # Keep last `keep` lines, rewriting in-place.
+            text = self.log_path.read_text(errors="replace")
+            lines = text.splitlines(keepends=True)
+            if len(lines) <= keep:
+                print(
+                    f"pruned {self.log_path}: nothing to do "
+                    f"(file has {len(lines)} lines, keep={keep})"
+                )
+                return 0
+            trimmed = lines[-keep:]
+            # Open for read+write, seek to start, write trimmed content, truncate
+            # the remainder. This preserves the inode → tmux pipe-pane's fd keeps
+            # writing to the same file → operator continues to see new lines after
+            # the prune.  Using os.replace instead would detach the fd from the
+            # path, sending new tmux output to the old (now-unlinked) inode.
+            with self.log_path.open("r+") as f:
+                f.seek(0)
+                f.write("".join(trimmed))
+                f.truncate()
+            print(f"pruned {self.log_path}: kept last {len(trimmed)} lines (was {len(lines)})")
+            return 0
 
         if follow:
             proc = subprocess.Popen(["tail", "-f", str(self.log_path)])
