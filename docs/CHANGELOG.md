@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.7.2] - 2026-05-05
+
+### Changed
+
+- **`vctl lmmseval run-loop`** — task script swapped from `internvl35_8b.sh` to `qwen3vl8binstruct.sh`.
+
 ## [0.7.1] - 2026-05-05
 
 ### Added

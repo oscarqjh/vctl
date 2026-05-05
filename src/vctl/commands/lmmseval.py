@@ -12,7 +12,7 @@ _TMUX_NAME = "vctl-lmmseval"
 _LMMS_ROOT = "/mnt/umm/users/qianjianheng/workspace/lmms-eval"
 _VENV = f"{_LMMS_ROOT}/.venv_novllm"
 _RUN_LOOP_SH = f"{_LMMS_ROOT}/scripts/run_loop.sh"
-_TASK_SH = f"{_LMMS_ROOT}/scripts/osibench_32frame/internvl35_8b.sh"
+_TASK_SH = f"{_LMMS_ROOT}/scripts/osibench_32frame/qwen3vl8binstruct.sh"
 _START_IDX = 0
 _END_IDX = 5
 
