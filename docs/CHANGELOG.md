@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.7.3] - 2026-05-05
+
+### Fixed
+
+- **`vctl lmmseval run-loop`** — propagate `HF_*` / `HUGGINGFACE_*` / `TRANSFORMERS_*` / `ACCELERATE_*` / `TORCH_*` / `CUDA_*` / `NCCL_*` / `OMP_*` env vars from the current shell into the detached tmux session via explicit `export` statements. tmux server caches env from when first started, so vars set later in the operator's shell were missing inside the session — caused offline-cache misses (`Network is unreachable` to huggingface.co) when `TRANSFORMERS_OFFLINE=1` / `HF_HOME` weren't visible to the eval. Mirrors the Phase 1 vllm `PATH` fix.
+
 ## [0.7.2] - 2026-05-05
 
 ### Changed
