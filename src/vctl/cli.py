@@ -25,9 +25,13 @@ _COMMANDS: dict[str, str] = {
     "config": "vctl.commands.config_cmd",
     "init-config": "vctl.commands.init_config",
     "rolling-restart": "vctl.commands.rolling_restart",  # Phase 3
+    "lmmseval": "vctl.commands.lmmseval",  # hidden helper
 }
 
 _PROFILE_AWARE = {"info", "serve", "args", "preflight", "stop"}
+
+# Commands hidden from `vctl --help` listing but still dispatchable.
+_HIDDEN_COMMANDS = {"lmmseval"}
 
 # Sentinel: distinguishes "user supplied --config" from "no --config given".
 _CONFIG_SENTINEL = "<auto>"
@@ -100,6 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for name in _COMMANDS:
+        if name in _HIDDEN_COMMANDS:
+            # Hidden commands are dispatched in main() before argparse runs;
+            # registering them with help=SUPPRESS shows literal "==SUPPRESS==".
+            continue
         # add_help=False so `vctl <cmd> --help` passes --help through to the
         # command module's own subparser (which knows its real verbs/flags).
         # Otherwise argparse prints an empty shallow help here and never
@@ -142,6 +150,19 @@ def _dispatch(name: str, argv_rest: list[str], ns: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     raw = list(argv if argv is not None else sys.argv[1:])
     raw = _hoist_positional_profile(raw)
+
+    # Hidden commands bypass the global argparse — they are not listed in
+    # `vctl --help` and don't honor the global flags.
+    for i, tok in enumerate(raw):
+        if tok.startswith("-"):
+            continue
+        if tok in _HIDDEN_COMMANDS:
+            from vctl.logging import configure as _configure_logging
+
+            _configure_logging()
+            ns = argparse.Namespace(command=tok, config=str(_CONFIG_DEFAULT_HOME), profile=None)
+            return _dispatch(tok, raw[i + 1 :], ns)
+        break
 
     parser = build_parser()
     ns, rest = parser.parse_known_args(raw)

@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.7.1] - 2026-05-05
+
+### Added
+
+- **`vctl lmmseval`** — hidden helper for the lmms-eval workspace. Sub-verbs `run-loop / stop / status`. `run-loop` spawns the hardcoded `osibench_32frame/internvl35_8b.sh` evaluation loop in a detached `vctl-lmmseval` tmux session with the project venv (`/mnt/umm/users/qianjianheng/workspace/lmms-eval/.venv_novllm`) activated. Not surfaced in `vctl --help`.
+
 ## [0.7.0] - 2026-05-04
 
 ### Added
