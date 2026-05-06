@@ -34,16 +34,26 @@ _ENV_PROPAGATE_PREFIXES = (
     "OMP_",
 )
 
+# Pods have no internet egress to huggingface.co. Force offline mode so
+# transformers / huggingface_hub never HEAD the network even when something
+# (cache miss, processor_config.json lookup) tempts them to.
+_FORCED_ENV: dict[str, str] = {
+    "TRANSFORMERS_OFFLINE": "1",
+    "HF_HUB_OFFLINE": "1",
+    "HF_DATASETS_OFFLINE": "1",
+}
+
 
 def _build_env_exports() -> str:
-    """Return shell `export K=V; ...` lines for every env var matching
-    `_ENV_PROPAGATE_PREFIXES`, with values shlex-quoted."""
-    pairs = [
-        (k, v)
-        for k, v in os.environ.items()
-        if any(k.startswith(p) for p in _ENV_PROPAGATE_PREFIXES)
-    ]
-    pairs.sort()
+    """Return shell `export K=V; ...` lines: forced-offline vars + every
+    env var matching `_ENV_PROPAGATE_PREFIXES`, with values shlex-quoted."""
+    propagated = {
+        k: v for k, v in os.environ.items() if any(k.startswith(p) for p in _ENV_PROPAGATE_PREFIXES)
+    }
+    # Forced vars override the shell — pods are offline regardless of operator
+    # shell state.
+    merged = {**propagated, **_FORCED_ENV}
+    pairs = sorted(merged.items())
     return " ".join(f"export {k}={shlex.quote(v)};" for k, v in pairs)
 
 

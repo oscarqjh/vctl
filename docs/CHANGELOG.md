@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.7.4] - 2026-05-06
+
+### Fixed
+
+- **`vctl lmmseval run-loop`** — force `TRANSFORMERS_OFFLINE=1`, `HF_HUB_OFFLINE=1`, `HF_DATASETS_OFFLINE=1` regardless of operator shell state. Pods have no internet egress to huggingface.co; without these, transformers / huggingface_hub still HEAD the network for `processor_config.json` even when the model is in the local cache, causing `Network is unreachable` errors. Hardcoded since this helper targets offline pods only.
+
 ## [0.7.3] - 2026-05-05
 
 ### Fixed
