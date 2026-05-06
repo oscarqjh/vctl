@@ -238,3 +238,36 @@ def test_at2_lb_manager_env_propagated(monkeypatch: pytest.MonkeyPatch) -> None:
     sess = TmuxSession("vctl-lb", env={"CUSTOM_VAR": "sentinel"})
     sess.start(["haproxy", "-f", "/tmp/ha.cfg"])
     assert any(arg == "CUSTOM_VAR=sentinel" for arg in calls[0])
+
+
+def test_validate_env_rejects_empty_key():
+    from vctl.tmux import _validate_env
+
+    with pytest.raises(ValueError, match="empty or contains '='"):
+        _validate_env({"": "v"})
+
+
+def test_validate_env_rejects_nul_value():
+    from vctl.tmux import _validate_env
+
+    with pytest.raises(ValueError, match="newline or NUL"):
+        _validate_env({"K": "value\x00with\x00nul"})
+
+
+def test_check_tmux_version_accepts_3_4(monkeypatch):
+    """tmux 3.4 (deployed env) is accepted; cached flag set True."""
+    import vctl.tmux as t
+
+    t._TMUX_VERSION_OK = None
+    monkeypatch.setattr(
+        "vctl.tmux.subprocess.run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="tmux 3.4\n", stderr=""),
+    )
+    t._check_tmux_version()
+    assert t._TMUX_VERSION_OK is True
+    # Calling again should be a no-op (cached) — stub now raises if called.
+    monkeypatch.setattr(
+        "vctl.tmux.subprocess.run",
+        lambda argv, **kw: (_ for _ in ()).throw(AssertionError("should not be called")),
+    )
+    t._check_tmux_version()  # cached, no subprocess

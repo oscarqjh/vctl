@@ -117,13 +117,13 @@ class TmuxSession:
         Raises RuntimeError if tmux is not installed or version < 3.2.
         Raises ValueError on invalid env entries.
         """
-        _check_tmux_version()
-
         if self.exists():
             raise RuntimeError(
                 f"tmux session {self.name!r} already exists; "
                 "call kill() first or use a different name"
             )
+
+        _check_tmux_version()
 
         env = self._env if self._env is not None else dict(os.environ)
         _validate_env(env)
