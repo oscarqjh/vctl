@@ -12,12 +12,17 @@ new session regardless of the tmux server's own stale environment cache.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
 _LOG = logging.getLogger(__name__)
 _TMUX_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
+
+# Module-level tmux version cache — checked once per process.
+_TMUX_VERSION_OK: bool | None = None
 
 
 def _validate_tmux_name(name: str) -> None:
@@ -42,6 +47,34 @@ def tmux_session_exists(name: str) -> bool:
         return proc.returncode == 0
     except FileNotFoundError:
         raise RuntimeError("tmux not installed") from None
+
+
+def _validate_env(env: dict[str, str]) -> None:
+    """Raise ValueError on env entries that would be silently mangled by tmux -e."""
+    for k, v in env.items():
+        if not k or "=" in k:
+            raise ValueError(f"invalid env key {k!r}: empty or contains '='")
+        if "\n" in v or "\x00" in v:
+            raise ValueError(f"invalid env value for {k!r}: contains newline or NUL")
+
+
+def _check_tmux_version() -> None:
+    """Raise RuntimeError if installed tmux is older than 3.2.
+
+    Result is cached in _TMUX_VERSION_OK after first check so subsequent
+    TmuxSession.start() calls in the same process pay no subprocess cost.
+    """
+    global _TMUX_VERSION_OK
+    if _TMUX_VERSION_OK is True:
+        return
+    try:
+        proc = subprocess.run(["tmux", "-V"], capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        raise RuntimeError("tmux not installed") from None
+    m = re.match(r"tmux (\d+)\.(\d+)", proc.stdout)
+    if not m or (int(m.group(1)), int(m.group(2))) < (3, 2):
+        raise RuntimeError(f"tmux 3.2+ required; found {proc.stdout.strip()!r}")
+    _TMUX_VERSION_OK = True
 
 
 class TmuxSession:
@@ -75,11 +108,36 @@ class TmuxSession:
     def start(self, argv: list[str] | str) -> None:
         """Spawn a new detached tmux session running argv.
 
+        If argv is a list, elements are joined with shlex.join before being
+        passed to tmux (exec-form safety).  If argv is a str, it is passed
+        verbatim (shell-line form, for callers like lmmseval that build a
+        pipeline with ``source``).
+
         Raises RuntimeError if the session already exists.
         Raises RuntimeError if tmux is not installed or version < 3.2.
         Raises ValueError on invalid env entries.
         """
-        raise NotImplementedError
+        _check_tmux_version()
+
+        if self.exists():
+            raise RuntimeError(
+                f"tmux session {self.name!r} already exists; "
+                "call kill() first or use a different name"
+            )
+
+        env = self._env if self._env is not None else dict(os.environ)
+        _validate_env(env)
+        cmd = shlex.join(argv) if isinstance(argv, list) else argv
+
+        tmux_argv: list[str] = ["tmux", "new-session", "-d", "-s", self.name]
+        for k, v in env.items():
+            tmux_argv += ["-e", f"{k}={v}"]
+        tmux_argv.append(cmd)
+
+        try:
+            subprocess.run(tmux_argv, check=True)
+        except FileNotFoundError:
+            raise RuntimeError("tmux not installed") from None
 
     def pane_pid(self) -> int | None:
         """Return the PID of the foreground process in the session's first pane.
