@@ -83,7 +83,20 @@ def test_start_refuses_when_session_exists(tmp_path: Path, monkeypatch: pytest.M
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: True)
+    class _AlwaysExists:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return True
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            pass
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _AlwaysExists)
     rc = _make_rc()
     vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")
     with pytest.raises(RuntimeError, match="already running"):
@@ -95,9 +108,20 @@ def test_start_writes_all_four_state_files(tmp_path: Path, monkeypatch: pytest.M
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
-    monkeypatch.setattr(vm_mod, "tmux_run_detached_argv", lambda name, argv: None)
-    monkeypatch.setattr(vm_mod, "tmux_kill", lambda name: None)
+    class _FakeTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            pass
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _FakeTmuxSession)
 
     fake_pid = 99999
 
@@ -112,7 +136,6 @@ def test_start_writes_all_four_state_files(tmp_path: Path, monkeypatch: pytest.M
         return [proc]
 
     monkeypatch.setattr(vm_mod.psutil, "process_iter", fake_process_iter)
-    monkeypatch.setattr(vm_mod.subprocess, "run", lambda *a, **kw: MagicMock(returncode=0))
     monkeypatch.setattr(vm_mod, "_wait_for_ready", lambda port, timeout: None)
     monkeypatch.setattr(vm_mod, "_do_add", lambda ep, mgr, bs, pool_name=None: 0)
 
@@ -134,12 +157,22 @@ def test_start_pid_discovery_timeout_kills_session(
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
-    monkeypatch.setattr(vm_mod, "tmux_run_detached_argv", lambda name, argv: None)
-
     killed: list[str] = []
-    monkeypatch.setattr(vm_mod, "tmux_kill", lambda name: killed.append(name))
-    monkeypatch.setattr(vm_mod.subprocess, "run", lambda *a, **kw: MagicMock(returncode=0))
+
+    class _FakeTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            self._name = name
+
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            killed.append(self._name)
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _FakeTmuxSession)
     monkeypatch.setattr(vm_mod.psutil, "process_iter", lambda attrs: [])
 
     monkeypatch.setattr(vm_mod, "_VLLM_PID_POLL_TIMEOUT", 0.1)
@@ -160,11 +193,22 @@ def test_start_wait_for_ready_failure_cleans_up(
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
-    monkeypatch.setattr(vm_mod, "tmux_run_detached_argv", lambda name, argv: None)
-
     killed: list[str] = []
-    monkeypatch.setattr(vm_mod, "tmux_kill", lambda name: killed.append(name))
+
+    class _FakeTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            self._name = name
+
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            killed.append(self._name)
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _FakeTmuxSession)
 
     fake_pid = 99999
 
@@ -179,7 +223,6 @@ def test_start_wait_for_ready_failure_cleans_up(
         return [proc]
 
     monkeypatch.setattr(vm_mod.psutil, "process_iter", fake_process_iter)
-    monkeypatch.setattr(vm_mod.subprocess, "run", lambda *a, **kw: MagicMock(returncode=0))
 
     def _fail_ready(port: int, timeout: float) -> None:
         raise TimeoutError("stubbed timeout")
@@ -202,7 +245,20 @@ def test_status_all_alive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: True)
+    class _ExistsTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return True
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            pass
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _ExistsTmuxSession)
 
     fake_pid = os.getpid()  # use our own PID — guaranteed alive
     rc = _make_rc()
@@ -234,7 +290,20 @@ def test_status_tmux_dead_pid_alive(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
+    class _DeadTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            pass
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _DeadTmuxSession)
 
     fake_pid = os.getpid()
     rc = _make_rc()
@@ -256,7 +325,20 @@ def test_status_pidfile_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
+    class _DeadTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            pass
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _DeadTmuxSession)
     monkeypatch.setattr(vm_mod.httpx, "get", MagicMock(side_effect=httpx.ConnectError("x")))
     monkeypatch.setattr(vm_mod.BackendState, "list", lambda self: [])
 
@@ -277,7 +359,20 @@ def test_status_cross_host_pidfile_skips_liveness_check(
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
+    class _DeadTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            pass
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _DeadTmuxSession)
     monkeypatch.setattr(vm_mod.httpx, "get", MagicMock(side_effect=httpx.ConnectError("x")))
     monkeypatch.setattr(vm_mod.BackendState, "list", lambda self: [])
 
@@ -306,7 +401,21 @@ def test_stop_full_drain_sequence(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         vm_mod, "_do_remove", lambda ep, mgr, bs, pool_name=None: calls.append("remove") or 0
     )
-    monkeypatch.setattr(vm_mod, "tmux_kill", lambda name: calls.append("kill"))
+
+    class _KillTrackingTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return True
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            calls.append("kill")
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _KillTrackingTmuxSession)
     monkeypatch.setattr(
         vm_mod.subprocess,
         "run",
@@ -346,7 +455,7 @@ def test_stop_cross_host_guard_raises(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_stop_force_kill_after_grace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stop() calls tmux_kill when pid is still alive after VCTL_KILL_GRACE elapses."""
+    """stop() calls TmuxSession.kill when pid is still alive after VCTL_KILL_GRACE elapses."""
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
@@ -356,7 +465,21 @@ def test_stop_force_kill_after_grace(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(vm_mod.subprocess, "run", lambda *a, **kw: MagicMock(returncode=0))
 
     killed: list[str] = []
-    monkeypatch.setattr(vm_mod, "tmux_kill", lambda name: killed.append(name))
+
+    class _KillTrackingTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            self._name = name
+
+        def exists(self) -> bool:
+            return True
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            killed.append(self._name)
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _KillTrackingTmuxSession)
 
     # Use our own PID — always alive — to simulate a process that won't die.
     alive_pid = os.getpid()
@@ -371,7 +494,7 @@ def test_stop_force_kill_after_grace(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     vm.stop()
 
-    # tmux_kill must have been called since the process never exited.
+    # TmuxSession.kill must have been called since the process never exited.
     assert vm.session_name in killed
 
 
@@ -430,7 +553,20 @@ def test_console_calls_execvp_with_correct_args(
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: True)
+    class _ExistsTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return True
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            pass
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _ExistsTmuxSession)
 
     execvp_calls: list[tuple[str, list[str]]] = []
 
@@ -454,7 +590,20 @@ def test_console_raises_when_no_session(tmp_path: Path, monkeypatch: pytest.Monk
     import vctl.vllm_manager as vm_mod
     from vctl.vllm_manager import VllmManager
 
-    monkeypatch.setattr(vm_mod, "tmux_session_exists", lambda name: False)
+    class _DeadTmuxSession:
+        def __init__(self, name: str, **kw: object) -> None:
+            pass
+
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, **kw: object) -> None:
+            pass
+
+    monkeypatch.setattr(vm_mod, "TmuxSession", _DeadTmuxSession)
 
     rc = _make_rc()
     vm = VllmManager(rc, state_dir=tmp_path / "state", run_dir=tmp_path / "run")

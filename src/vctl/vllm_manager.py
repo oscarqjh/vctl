@@ -19,14 +19,9 @@ from vctl.commands.serve import _wait_for_idle, _wait_for_ready
 from vctl.lb.manager import LbManager
 from vctl.lb.routing import pool_for_model
 from vctl.lb.state import BackendState
-from vctl.platform import (
-    _validate_tmux_name,
-    detect_self_ip,
-    tmux_kill,
-    tmux_run_detached_argv,
-    tmux_session_exists,
-)
+from vctl.platform import detect_self_ip
 from vctl.resolver import ResolvedConfig
+from vctl.tmux import TmuxSession, _validate_tmux_name
 
 _LOG = logging.getLogger(__name__)
 
@@ -89,7 +84,7 @@ class VllmManager:
                 pass
 
         # Double-start guard.
-        if tmux_session_exists(self.session_name):
+        if TmuxSession(self.session_name).exists():
             raise RuntimeError(
                 f"vllm already running for profile {rc.profile_name!r} "
                 f"(tmux session {self.session_name!r}); "
@@ -152,23 +147,14 @@ class VllmManager:
             else:
                 argv.append(f"--{k}={v}")
 
-        # Wrap argv in `env K=V ... <argv>` so env_overrides take effect inside
-        # the tmux session. `env(1)` is on every PATH and accepts inline
-        # KEY=VALUE pairs followed by the command + args.
-        env_cmd: list[str] = ["env"]
-        for k, v in env_overrides.items():
-            env_cmd.append(f"{k}={v}")
-        env_cmd.extend(argv)
-
-        # Spawn the tmux session.
-        tmux_run_detached_argv(self.session_name, env_cmd)
+        # Spawn the tmux session with a full env snapshot + overrides.
+        # TmuxSession injects each key via tmux new-session -e KEY=VALUE so the
+        # session sees the correct environment regardless of the tmux server's
+        # own stale environment cache.  log_path is passed so TmuxSession sets
+        # up pipe-pane log capture immediately after spawning.
+        merged_env = {**os.environ, **env_overrides}
+        TmuxSession(self.session_name, env=merged_env, log_path=self.log_path).start(argv)
         _LOG.info("vllm started in tmux session %s", self.session_name)
-
-        # Set up pipe-pane log capture BEFORE any failure point so we capture early output.
-        subprocess.run(
-            ["tmux", "pipe-pane", "-t", self.session_name, "-o", f"cat >> {self.log_path}"],
-            check=False,
-        )
 
         # Poll psutil for the vllm PID.
         pid: int | None = None
@@ -244,7 +230,7 @@ class VllmManager:
 
     def _cleanup_on_failure(self) -> None:
         """Kill tmux session and unlink state files after a start() failure."""
-        tmux_kill(self.session_name)
+        TmuxSession(self.session_name).kill(tree=True)
         for p in (self.pid_path, self.cmd_path, self.host_path):
             with contextlib.suppress(OSError):
                 p.unlink()
@@ -309,7 +295,7 @@ class VllmManager:
                 time.sleep(0.5)
 
         # Force-kill session if still exists.
-        tmux_kill(self.session_name)
+        TmuxSession(self.session_name).kill(tree=True, grace_s=grace)
 
         # Unlink state files (leave log for post-mortem).
         for p in (self.pid_path, self.cmd_path, self.host_path):
@@ -369,7 +355,7 @@ class VllmManager:
         port = rc.server.http_port
 
         # 1. tmux session liveness (informational).
-        tmux_alive = tmux_session_exists(self.session_name)
+        tmux_alive = TmuxSession(self.session_name).exists()
 
         # 2. Pidfile + process liveness (read-only; never clean stale state here).
         pid: int | None = None
@@ -435,7 +421,7 @@ class VllmManager:
         Renamed from attach() in v0.5.1 to avoid CLI confusion with `vctl lb attach`
         (which registers a backend with the LB pool — different operation).
         """
-        if not tmux_session_exists(self.session_name):
+        if not TmuxSession(self.session_name).exists():
             raise RuntimeError(
                 f"no running session for profile {self.rc.profile_name!r} "
                 f"(session {self.session_name!r} not found). "
