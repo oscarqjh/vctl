@@ -334,3 +334,114 @@ def test_log_path_captures_output(tmp_path: Path) -> None:
         assert "captured-output" in text
     finally:
         sess.kill(tree=False)
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — exists() + pane_pid() + kill(tree=False)
+# ---------------------------------------------------------------------------
+
+
+def test_exists_delegates_to_tmux_session_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """exists() is a thin wrapper around tmux_session_exists."""
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
+    from vctl.tmux import TmuxSession
+
+    assert TmuxSession("vctl-lb").exists() is True
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    assert TmuxSession("vctl-lb").exists() is False
+
+
+def test_pane_pid_parses_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pane_pid() parses the integer from tmux list-panes -F '#{pane_pid}'."""
+    import subprocess as _sp
+
+    result = _sp.CompletedProcess(args=[], returncode=0, stdout="12345\n", stderr="")
+    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **kw: result)
+    from vctl.tmux import TmuxSession
+
+    assert TmuxSession("vctl-vllm-qwen", env={}).pane_pid() == 12345
+
+
+def test_pane_pid_returns_none_if_session_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pane_pid() returns None when tmux list-panes returns non-zero."""
+    import subprocess as _sp
+
+    result = _sp.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **kw: result)
+    from vctl.tmux import TmuxSession
+
+    assert TmuxSession("gone", env={}).pane_pid() is None
+
+
+def test_pane_pid_returns_none_on_empty_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pane_pid() returns None when list-panes returns 0 but empty stdout."""
+    import subprocess as _sp
+
+    result = _sp.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **kw: result)
+    from vctl.tmux import TmuxSession
+
+    assert TmuxSession("vctl-lb", env={}).pane_pid() is None
+
+
+# AT-8: kill is idempotent when session already gone
+def test_at8_kill_idempotent_when_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AT-8: kill() is a no-op and raises no error when session does not exist."""
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    run_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "vctl.tmux.subprocess.run",
+        lambda a, **k: run_calls.append(list(a)) or _fake_ok(),
+    )
+    from vctl.tmux import TmuxSession
+
+    TmuxSession("vctl-lb").kill()  # must not raise
+    assert not run_calls
+
+
+# AT-6: kill(tree=False) skips psutil, still calls kill-session
+def test_at6_lb_stop_tree_false_no_psutil(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AT-6: kill(tree=False) skips psutil.Process; tmux kill-session IS called."""
+    run_calls: list[list[str]] = []
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr(
+        "vctl.tmux.subprocess.run",
+        lambda a, **k: run_calls.append(list(a)) or _fake_ok(),
+    )
+    monkeypatch.setattr("vctl.tmux.TmuxSession.pane_pid", lambda self: 999)
+    psutil_calls: list[int] = []
+    monkeypatch.setattr(
+        "vctl.tmux.psutil.Process",
+        lambda pid: psutil_calls.append(pid),
+    )
+    from vctl.tmux import TmuxSession
+
+    TmuxSession("vctl-lb").kill(tree=False)
+    assert not psutil_calls
+    assert any("kill-session" in " ".join(c) for c in run_calls)
+
+
+# Integration: full roundtrip (requires real tmux)
+@pytest.mark.integration
+def test_session_start_exists_kill_roundtrip(tmp_path: Path) -> None:
+    """Integration: start → exists → pane_pid → kill roundtrip."""
+    import time
+
+    from vctl.tmux import TmuxSession
+
+    name = "vctl-test-integration"
+    sess = TmuxSession(name, env={"VCTL_TMUX_TEST": "1"})
+    sess.start(["sleep", "60"])
+    try:
+        assert sess.exists()
+        pid = sess.pane_pid()
+        assert pid is not None and pid > 0
+        sess.kill(tree=True)
+        time.sleep(0.5)
+        assert not sess.exists()
+    finally:
+        sess.kill(tree=False)  # idempotent cleanup

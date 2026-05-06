@@ -11,12 +11,16 @@ new session regardless of the tmux server's own stale environment cache.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
 from pathlib import Path
+
+import psutil
 
 _LOG = logging.getLogger(__name__)
 _TMUX_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -148,13 +152,62 @@ class TmuxSession:
     def pane_pid(self) -> int | None:
         """Return the PID of the foreground process in the session's first pane.
 
+        Uses ``tmux list-panes -t NAME -F '#{pane_pid}'``.
         Returns None if the session does not exist or the PID cannot be parsed.
         """
-        raise NotImplementedError
+        try:
+            result = subprocess.run(
+                ["tmux", "list-panes", "-t", self.name, "-F", "#{pane_pid}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return None
+            lines = result.stdout.strip().splitlines()
+            if not lines:
+                return None
+            return int(lines[0])
+        except (FileNotFoundError, ValueError):
+            return None
 
     def kill(self, *, tree: bool = True, grace_s: float = 5.0) -> None:
         """Terminate the session's process tree then kill the tmux session.
 
+        Algorithm:
+          1. If tree=True: collect pane_pid() + all psutil descendants.
+             SIGTERM all; poll for exit up to grace_s; SIGKILL survivors.
+          2. ``tmux kill-session -t NAME`` (idempotent — check=False).
+
         Idempotent: safe to call when session does not exist.
+        kill(tree=False) skips psutil tree-kill — use for callers (e.g.
+        LbManager.stop) where the process was already terminated via pidfile
+        and only an empty pane remains.
         """
-        raise NotImplementedError
+        if not self.exists():
+            return
+
+        if tree:
+            pid = self.pane_pid()
+            if pid is not None:
+                try:
+                    root = psutil.Process(pid)
+                    procs: list[psutil.Process] = root.children(recursive=True) + [root]
+                except psutil.NoSuchProcess:
+                    procs = []
+
+                for p in procs:
+                    with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+                        p.send_signal(signal.SIGTERM)
+
+                _, alive = psutil.wait_procs(procs, timeout=grace_s)
+                for p in alive:
+                    with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+                        p.send_signal(signal.SIGKILL)
+
+        with contextlib.suppress(FileNotFoundError):
+            subprocess.run(
+                ["tmux", "kill-session", "-t", self.name],
+                check=False,
+                capture_output=True,
+            )
