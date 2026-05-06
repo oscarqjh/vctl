@@ -121,3 +121,9 @@ def tmux_kill(name: str) -> None:
         subprocess.run(["tmux", "kill-session", "-t", name], check=False)
     except FileNotFoundError:
         raise RuntimeError("tmux not installed") from None
+
+
+# TmuxSession re-export — callers should import from vctl.tmux directly;
+# this re-export exists only so that code that imports platform during migration
+# can reach TmuxSession without a separate import change.
+from vctl.tmux import TmuxSession as TmuxSession  # noqa: E402,F401
