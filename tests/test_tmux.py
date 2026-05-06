@@ -445,3 +445,124 @@ def test_session_start_exists_kill_roundtrip(tmp_path: Path) -> None:
         assert not sess.exists()
     finally:
         sess.kill(tree=False)  # idempotent cleanup
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — kill(tree=True): psutil SIGTERM → wait → SIGKILL
+# ---------------------------------------------------------------------------
+
+
+# AT-4: vllm stop tree-kills workers
+def test_at4_serve_stop_tree_kills_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AT-4: kill(tree=True) sends SIGTERM to pane_pid + all children."""
+    import signal
+
+    sigtermed: list[int] = []
+    killed: list[int] = []
+
+    class FakeProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def send_signal(self, sig: int) -> None:
+            (sigtermed if sig == signal.SIGTERM else killed).append(self.pid)
+
+        def children(self, recursive: bool = False) -> list[FakeProc]:
+            return [FakeProc(1001), FakeProc(1002)]
+
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr("vctl.tmux.TmuxSession.pane_pid", lambda s: 1000)
+    monkeypatch.setattr("vctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
+    monkeypatch.setattr("vctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], []))
+    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
+    from vctl.tmux import TmuxSession
+
+    TmuxSession("vctl-vllm-qwen").kill(tree=True)
+    assert set(sigtermed) == {1000, 1001, 1002}
+
+
+# AT-5: lmmseval stop tree-kills run_loop + 8 accelerate workers
+def test_at5_lmmseval_stop_tree_kills_8_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AT-5: kill(tree=True) sends SIGTERM to root (2000) + 8 children (2001-2008)."""
+    import signal
+
+    sigtermed: list[int] = []
+
+    class FakeProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def send_signal(self, sig: int) -> None:
+            if sig == signal.SIGTERM:
+                sigtermed.append(self.pid)
+
+        def children(self, recursive: bool = False) -> list[FakeProc]:
+            return [FakeProc(p) for p in range(2001, 2009)]
+
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr("vctl.tmux.TmuxSession.pane_pid", lambda s: 2000)
+    monkeypatch.setattr("vctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
+    monkeypatch.setattr("vctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], []))
+    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
+    from vctl.tmux import TmuxSession
+
+    TmuxSession("vctl-lmmseval").kill(tree=True)
+    assert set(sigtermed) == set(range(2000, 2009))
+
+
+def test_kill_tree_sigkills_survivors_after_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """kill(tree=True) sends SIGKILL to processes still alive after grace_s."""
+    import signal
+
+    sigtermed: list[int] = []
+    sigkilled: list[int] = []
+
+    class FakeProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def send_signal(self, sig: int) -> None:
+            (sigtermed if sig == signal.SIGTERM else sigkilled).append(self.pid)
+
+        def children(self, recursive: bool = False) -> list[FakeProc]:
+            return [FakeProc(5001)]
+
+    survivor = FakeProc(5000)
+
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr("vctl.tmux.TmuxSession.pane_pid", lambda s: 5000)
+    monkeypatch.setattr("vctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
+    # Simulate wait_procs returning one survivor (root process)
+    monkeypatch.setattr("vctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], [survivor]))
+    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
+    from vctl.tmux import TmuxSession
+
+    TmuxSession("vctl-vllm-qwen").kill(tree=True, grace_s=0.01)
+    assert 5000 in sigkilled  # survivor received SIGKILL
+
+
+# Integration: env propagation into real session
+@pytest.mark.integration
+def test_env_propagation_into_session(tmp_path: Path) -> None:
+    """Integration: env vars passed via -e actually reach the pane process."""
+    import time
+
+    from vctl.tmux import TmuxSession
+
+    name = "vctl-test-env"
+    marker_file = tmp_path / "env_marker.txt"
+    sess = TmuxSession(
+        name,
+        env={"VCTL_MARKER": "hello-from-test"},
+    )
+    sess.start(f"sh -c 'echo $VCTL_MARKER > {marker_file}; sleep 5'")
+    try:
+        time.sleep(1)
+        assert marker_file.exists()
+        assert "hello-from-test" in marker_file.read_text()
+    finally:
+        sess.kill(tree=False)
