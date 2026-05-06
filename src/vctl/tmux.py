@@ -139,6 +139,12 @@ class TmuxSession:
         except FileNotFoundError:
             raise RuntimeError("tmux not installed") from None
 
+        if self.log_path is not None:
+            subprocess.run(
+                ["tmux", "pipe-pane", "-t", self.name, "-o", f"cat >> {self.log_path}"],
+                check=False,
+            )
+
     def pane_pid(self) -> int | None:
         """Return the PID of the foreground process in the session's first pane.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -271,3 +272,65 @@ def test_check_tmux_version_accepts_3_4(monkeypatch):
         lambda argv, **kw: (_ for _ in ()).throw(AssertionError("should not be called")),
     )
     t._check_tmux_version()  # cached, no subprocess
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — log_path + pipe-pane
+# ---------------------------------------------------------------------------
+
+
+# AT-9: log_path triggers pipe-pane call
+def test_at9_log_path_emits_pipe_pane(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """AT-9: When log_path is given, a second subprocess.run with pipe-pane is issued."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    monkeypatch.setattr(
+        "vctl.tmux.subprocess.run",
+        lambda a, **k: calls.append(list(a)) or _fake_ok(),
+    )
+    log = tmp_path / "out.log"
+    from vctl.tmux import TmuxSession
+
+    TmuxSession("vctl-vllm-qwen", env={}, log_path=log).start(["vllm"])
+    pipe_calls = [c for c in calls if "pipe-pane" in c]
+    assert len(pipe_calls) == 1
+    assert str(log) in " ".join(pipe_calls[0])
+
+
+def test_no_log_path_skips_pipe_pane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without log_path, no pipe-pane subprocess is issued."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    monkeypatch.setattr(
+        "vctl.tmux.subprocess.run",
+        lambda a, **k: calls.append(list(a)) or _fake_ok(),
+    )
+    from vctl.tmux import TmuxSession
+
+    TmuxSession("vctl-lb", env={}).start(["haproxy", "-f", "/tmp/h.cfg"])
+    pipe_calls = [c for c in calls if "pipe-pane" in c]
+    assert len(pipe_calls) == 0
+
+
+# Integration test (requires real tmux 3.2+ on PATH)
+@pytest.mark.integration
+def test_log_path_captures_output(tmp_path: Path) -> None:
+    """Integration: log_path receives stdout via pipe-pane."""
+    import time
+
+    from vctl.tmux import TmuxSession
+
+    name = "vctl-test-log"
+    log = tmp_path / "session.log"
+    sess = TmuxSession(name, env={}, log_path=log)
+    sess.start(["echo", "captured-output"])
+    try:
+        time.sleep(1)
+        text = log.read_text() if log.exists() else ""
+        assert "captured-output" in text
+    finally:
+        sess.kill(tree=False)
