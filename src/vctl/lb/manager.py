@@ -92,7 +92,7 @@ class LbManager:
         # env={**os.environ} ensures the haproxy session inherits the caller's
         # full environment, eliminating the stale-tmux-server-cache footgun
         # (spec §4.1 — LbManager env propagation).
-        TmuxSession(self.tmux_name, env={**os.environ}).start(
+        TmuxSession(self.tmux_name).start(
             [binary, "-f", str(self.cfg_path), "-p", str(self.pid_path)]
         )
         _LOG.info("haproxy started in tmux session %s", self.tmux_name)
