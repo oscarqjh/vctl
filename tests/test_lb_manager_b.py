@@ -38,7 +38,7 @@ def _make_mgr(tmp_path: Path, host: str = "10.0.0.1") -> LbManager:
 
 
 @patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.1")
-@patch("vctl.lb.manager.tmux_session_exists", return_value=False)
+@patch("vctl.tmux.tmux_session_exists", return_value=False)
 @patch("vctl.lb.manager.socket.create_connection", side_effect=OSError)
 @patch("vctl.lb.manager._verify_pid_is_haproxy", return_value=True)
 def test_start_raises_when_already_running(
@@ -58,15 +58,15 @@ def test_start_raises_when_already_running(
 
 
 @patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.1")
-@patch("vctl.lb.manager.tmux_session_exists", return_value=False)
+@patch("vctl.tmux.tmux_session_exists", return_value=False)
 @patch("vctl.lb.manager.socket.create_connection", side_effect=OSError)
-@patch("vctl.lb.manager.tmux_run_detached_argv")
+@patch("vctl.lb.manager.TmuxSession")
 @patch("vctl.lb.manager.ensure_haproxy", return_value="/usr/bin/haproxy")
 @patch("vctl.lb.manager._verify_pid_is_haproxy", return_value=True)
 def test_start_force_calls_stop_then_starts(
     mock_verify: MagicMock,
     mock_haproxy: MagicMock,
-    mock_tmux_run: MagicMock,
+    mock_tmux_cls: MagicMock,
     mock_conn: MagicMock,
     mock_tmux_exists: MagicMock,
     mock_ip: MagicMock,
@@ -90,7 +90,7 @@ def test_start_force_calls_stop_then_starts(
 
     mgr.start(force=True)
     assert stop_called, "stop() must be called when force=True and already running"
-    assert mock_tmux_run.called, "tmux_run_detached_argv must be called after stop()"
+    assert mock_tmux_cls.called, "TmuxSession must be instantiated after stop()"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def test_stop_sigkill_fallback(
     monkeypatch.setattr("vctl.lb.manager.os.kill", fake_kill)
     monkeypatch.setattr("vctl.lb.manager.time.monotonic", fake_monotonic)
     monkeypatch.setattr("vctl.lb.manager.time.sleep", lambda _: None)
-    monkeypatch.setattr("vctl.lb.manager.tmux_kill", lambda _: None)
+    monkeypatch.setattr("vctl.lb.manager.TmuxSession", MagicMock())
 
     mgr.stop()
 
@@ -172,7 +172,7 @@ def test_stop_unlinks_sock_path(
     monkeypatch.setattr("vctl.lb.manager.os.kill", fake_kill)
     monkeypatch.setattr("vctl.lb.manager.time.monotonic", _real_monotonic)
     monkeypatch.setattr("vctl.lb.manager.time.sleep", lambda _: None)
-    monkeypatch.setattr("vctl.lb.manager.tmux_kill", lambda _: None)
+    monkeypatch.setattr("vctl.lb.manager.TmuxSession", MagicMock())
 
     mgr.stop()
     assert not mgr.sock_path.exists(), "sock_path must be unlinked after stop()"

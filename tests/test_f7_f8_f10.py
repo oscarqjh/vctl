@@ -324,7 +324,7 @@ def test_stop_kills_all_pids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         _make_fake_proc(pid=300, cfg_path=str(cfg), create_time=3000.0),
     ]
     monkeypatch.setattr(psutil, "process_iter", lambda attrs: fake_procs)
-    monkeypatch.setattr("vctl.lb.manager.tmux_kill", lambda _: None)
+    monkeypatch.setattr("vctl.lb.manager.TmuxSession", MagicMock())
 
     sigterm_targets: list[int] = []
 

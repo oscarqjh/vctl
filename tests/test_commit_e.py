@@ -129,7 +129,7 @@ class TestE1AdminBindAddr:
         with (
             patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.2"),
             patch("vctl.lb.manager.ensure_haproxy", return_value="/usr/bin/haproxy"),
-            patch("vctl.lb.manager.tmux_run_detached_argv"),
+            patch("vctl.lb.manager.TmuxSession"),
             caplog.at_level(logging.WARNING, logger="vctl.lb.manager"),
         ):
             mgr.start(force=False)
@@ -170,7 +170,7 @@ class TestE1AdminBindAddr:
         with (
             patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.2"),
             patch("vctl.lb.manager.ensure_haproxy", return_value="/usr/bin/haproxy"),
-            patch("vctl.lb.manager.tmux_run_detached_argv"),
+            patch("vctl.lb.manager.TmuxSession"),
             caplog.at_level(logging.WARNING, logger="vctl.lb.manager"),
         ):
             mgr.start(force=False)
@@ -204,7 +204,7 @@ class TestE1AdminBindAddr:
         )
         mgr = LbManager(lb, state_dir=tmp_path, run_dir=tmp_path)
         with (
-            patch("vctl.lb.manager.tmux_session_exists", return_value=False),
+            patch("vctl.tmux.tmux_session_exists", return_value=False),
         ):
             st = mgr.status()
         assert st["admin_bind"] == "127.0.0.1:9001"

@@ -15,13 +15,8 @@ from vctl.config.models import LbHaproxy
 from vctl.lb.installer import ensure_haproxy
 from vctl.lb.render import RuntimePaths, render_haproxy_cfg
 from vctl.lb.state import BackendState
-from vctl.platform import (
-    _validate_tmux_name,
-    detect_self_ip,
-    tmux_kill,
-    tmux_run_detached_argv,
-    tmux_session_exists,
-)
+from vctl.platform import detect_self_ip
+from vctl.tmux import TmuxSession, _validate_tmux_name
 
 _LOG = logging.getLogger(__name__)
 _TMUX_NAME = "vctl-lb"
@@ -93,10 +88,12 @@ class LbManager:
         cfg = self.render_config()
         self.cfg_path.write_text(cfg)
         binary = ensure_haproxy()
-        # E3: use argv form so paths with spaces are quoted correctly
-        tmux_run_detached_argv(
-            self.tmux_name,
-            [binary, "-f", str(self.cfg_path), "-p", str(self.pid_path)],
+        # E3: use argv form so paths with spaces are quoted correctly.
+        # env={**os.environ} ensures the haproxy session inherits the caller's
+        # full environment, eliminating the stale-tmux-server-cache footgun
+        # (spec §4.1 — LbManager env propagation).
+        TmuxSession(self.tmux_name, env={**os.environ}).start(
+            [binary, "-f", str(self.cfg_path), "-p", str(self.pid_path)]
         )
         _LOG.info("haproxy started in tmux session %s", self.tmux_name)
 
@@ -169,7 +166,9 @@ class LbManager:
             self.sock_path.unlink()
 
         # 2. Tear down the tmux session if it exists (idempotent).
-        tmux_kill(self.tmux_name)
+        # tree=False: haproxy was already terminated via pidfile SIGTERM above;
+        # only the empty tmux pane remains.
+        TmuxSession(self.tmux_name).kill(tree=False)
 
     def reload(self) -> None:
         # F10: collect ALL haproxy pids sharing this cfg so we can -sf them all.
@@ -279,7 +278,7 @@ class LbManager:
             admin_reachable = True
 
         # 3. tmux-managed (informational only)
-        tmux_managed = tmux_session_exists(self.tmux_name)
+        tmux_managed = TmuxSession(self.tmux_name).exists()
 
         # F4: is_local_host — True when our IP matches lb.host
         is_local_host = detect_self_ip() == self.lb.host

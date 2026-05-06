@@ -74,27 +74,27 @@ class TestF2TmuxNameParameter:
             _make_mgr(tmp_path, tmux_name="bad/name")
 
     @patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.1")
-    @patch("vctl.lb.manager.tmux_run_detached_argv")
+    @patch("vctl.lb.manager.TmuxSession")
     @patch("vctl.lb.manager.ensure_haproxy", return_value="/usr/bin/haproxy")
     def test_start_uses_custom_tmux_name(
         self, mock_haproxy: MagicMock, mock_tmux: MagicMock, mock_ip: MagicMock, tmp_path: Path
     ) -> None:
-        """F2: start() calls tmux_run_detached_argv with self.tmux_name."""
+        """F2: start() calls TmuxSession with self.tmux_name."""
         mgr = _make_mgr(tmp_path, tmux_name="vctl-lb-test-abc")
         mgr.start(force=True)
         assert mock_tmux.called
         call_args = mock_tmux.call_args
         assert call_args[0][0] == "vctl-lb-test-abc"
 
-    @patch("vctl.lb.manager.tmux_kill")
-    def test_stop_uses_custom_tmux_name(self, mock_kill: MagicMock, tmp_path: Path) -> None:
-        """F2: stop() calls tmux_kill with self.tmux_name."""
+    @patch("vctl.lb.manager.TmuxSession")
+    def test_stop_uses_custom_tmux_name(self, mock_tmux_cls: MagicMock, tmp_path: Path) -> None:
+        """F2: stop() calls TmuxSession with self.tmux_name."""
         mgr = _make_mgr(tmp_path, tmux_name="vctl-lb-test-xyz")
         mgr.stop()
-        mock_kill.assert_called_once_with("vctl-lb-test-xyz")
+        mock_tmux_cls.assert_called_once_with("vctl-lb-test-xyz")
 
     @patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.1")
-    @patch("vctl.lb.manager.tmux_session_exists", return_value=True)
+    @patch("vctl.tmux.tmux_session_exists", return_value=True)
     @patch("vctl.lb.manager.socket.create_connection", side_effect=OSError)
     def test_status_uses_custom_tmux_name(
         self,
@@ -218,7 +218,7 @@ class TestF3ForceCleanup:
 
 
 class TestF4StatusIsLocalHost:
-    @patch("vctl.lb.manager.tmux_session_exists", return_value=False)
+    @patch("vctl.tmux.tmux_session_exists", return_value=False)
     @patch("vctl.lb.manager.socket.create_connection", side_effect=OSError)
     @patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.1")
     def test_status_is_local_host_true_when_ip_matches(
@@ -233,7 +233,7 @@ class TestF4StatusIsLocalHost:
         st = mgr.status()
         assert st["is_local_host"] is True
 
-    @patch("vctl.lb.manager.tmux_session_exists", return_value=False)
+    @patch("vctl.tmux.tmux_session_exists", return_value=False)
     @patch("vctl.lb.manager.socket.create_connection", side_effect=OSError)
     @patch("vctl.lb.manager.detect_self_ip", return_value="10.0.0.99")
     def test_status_is_local_host_false_when_ip_differs(
