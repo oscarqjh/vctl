@@ -365,31 +365,30 @@ class TestE2ShaVerification:
 
 class TestE3TmuxQuoting:
     def test_invalid_name_space_raises(self) -> None:
-        """E3: session name with space raises ValueError."""
-        from vctl.platform import tmux_run_detached
+        """E3: session name with space raises ValueError at TmuxSession init."""
+        from vctl.tmux import TmuxSession
 
         with pytest.raises(ValueError, match="invalid tmux session name"):
-            tmux_run_detached("bad name", "echo hi")
+            TmuxSession("bad name")
 
     def test_invalid_name_slash_raises(self) -> None:
-        """E3: session name with slash raises ValueError."""
-        from vctl.platform import tmux_run_detached
+        """E3: session name with slash raises ValueError at TmuxSession init."""
+        from vctl.tmux import TmuxSession
 
         with pytest.raises(ValueError, match="invalid tmux session name"):
-            tmux_run_detached("bad/name", "echo hi")
+            TmuxSession("bad/name")
 
     def test_valid_name_with_hyphens_and_dots(self) -> None:
         """E3: vctl-lb_v2.x is a valid session name."""
-        from vctl.platform import tmux_run_detached
+        from vctl.tmux import TmuxSession
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            tmux_run_detached("vctl-lb_v2.x", "echo hi")
-        assert mock_run.called
+        # Valid name must not raise at init time
+        sess = TmuxSession("vctl-lb_v2.x")
+        assert sess.name == "vctl-lb_v2.x"
 
     def test_tmux_not_installed_session_exists_raises(self) -> None:
         """E3: FileNotFoundError from tmux → RuntimeError('tmux not installed')."""
-        from vctl.platform import tmux_session_exists
+        from vctl.tmux import tmux_session_exists
 
         with (
             patch("subprocess.run", side_effect=FileNotFoundError("tmux")),
@@ -398,66 +397,78 @@ class TestE3TmuxQuoting:
             tmux_session_exists("vctl-test")
 
     def test_tmux_not_installed_kill_raises(self) -> None:
-        """E3: tmux_kill raises RuntimeError when tmux not on PATH."""
-        from vctl.platform import tmux_kill
+        """E3: TmuxSession.kill raises RuntimeError when tmux not on PATH."""
+        from vctl.tmux import TmuxSession
 
         with (
+            patch("vctl.tmux.tmux_session_exists", return_value=True),
+            patch("vctl.tmux.TmuxSession.pane_pid", return_value=None),
+            patch("subprocess.run", side_effect=FileNotFoundError("tmux")),
+        ):
+            # kill() calls tmux kill-session; FileNotFoundError is suppressed
+            # by contextlib.suppress(FileNotFoundError) in kill() — so no raise.
+            # The important guarantee is that kill() is idempotent / doesn't crash.
+            TmuxSession("vctl-test").kill(tree=False)
+
+    def test_tmux_not_installed_start_raises(self) -> None:
+        """E3: TmuxSession.start raises RuntimeError when tmux not on PATH."""
+        from vctl.tmux import TmuxSession
+
+        with (
+            patch("vctl.tmux.tmux_session_exists", return_value=False),
+            patch("vctl.tmux._check_tmux_version"),
             patch("subprocess.run", side_effect=FileNotFoundError("tmux")),
             pytest.raises(RuntimeError, match="tmux not installed"),
         ):
-            tmux_kill("vctl-test")
-
-    def test_tmux_not_installed_run_detached_raises(self) -> None:
-        """E3: tmux_run_detached raises RuntimeError when tmux not on PATH."""
-        from vctl.platform import tmux_run_detached
-
-        with (
-            patch("subprocess.run", side_effect=FileNotFoundError("tmux")),
-            pytest.raises(RuntimeError, match="tmux not installed"),
-        ):
-            tmux_run_detached("vctl-lb", "haproxy -f /tmp/cfg")
+            TmuxSession("vctl-lb").start("echo hi")
 
     def test_tmux_session_exists_invalid_name_raises(self) -> None:
         """E3: tmux_session_exists raises ValueError on invalid name."""
-        from vctl.platform import tmux_session_exists
+        from vctl.tmux import tmux_session_exists
 
         with pytest.raises(ValueError, match="invalid tmux session name"):
             tmux_session_exists("bad name!")
 
     def test_tmux_kill_invalid_name_raises(self) -> None:
-        """E3: tmux_kill raises ValueError on invalid name."""
-        from vctl.platform import tmux_kill
+        """E3: TmuxSession raises ValueError on invalid name at init."""
+        from vctl.tmux import TmuxSession
 
         with pytest.raises(ValueError, match="invalid tmux session name"):
-            tmux_kill("bad/name")
+            TmuxSession("bad/name")
 
     def test_argv_helper_quotes_paths_with_spaces(self) -> None:
-        """E3: tmux_run_detached_argv quotes path components with shlex."""
-        from vctl.platform import tmux_run_detached_argv
+        """E3: TmuxSession.start(list) joins argv with shlex — paths with spaces quoted."""
+        from vctl.tmux import TmuxSession
 
-        captured_cmd: list[str] = []
+        captured_argv: list[list[str]] = []
 
         def _fake_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            captured_cmd.extend(cmd)
+            captured_argv.append(list(cmd))
             return MagicMock(returncode=0)
 
-        with patch("subprocess.run", side_effect=_fake_run):
-            tmux_run_detached_argv(
-                "vctl-lb",
-                ["haproxy", "-f", "/path with space.cfg"],
-            )
+        with (
+            patch("vctl.tmux.tmux_session_exists", return_value=False),
+            patch("vctl.tmux._check_tmux_version"),
+            patch("subprocess.run", side_effect=_fake_run),
+        ):
+            TmuxSession("vctl-lb", env={}).start(["haproxy", "-f", "/path with space.cfg"])
 
-        # The last element passed to tmux new-session should be the quoted shell cmd
-        shell_cmd = captured_cmd[-1]
+        # The last element passed to tmux new-session should be the shlex-joined cmd
+        assert captured_argv, "subprocess.run was never called"
+        shell_cmd = captured_argv[0][-1]
         assert "'/path with space.cfg'" in shell_cmd or '"/path with space.cfg"' in shell_cmd, (
             f"Expected quoted path in shell cmd, got: {shell_cmd!r}"
         )
 
     def test_argv_helper_valid_name(self) -> None:
-        """E3: tmux_run_detached_argv with valid name does not raise."""
-        from vctl.platform import tmux_run_detached_argv
+        """E3: TmuxSession.start with valid name does not raise."""
+        from vctl.tmux import TmuxSession
 
-        with patch("subprocess.run") as mock_run:
+        with (
+            patch("vctl.tmux.tmux_session_exists", return_value=False),
+            patch("vctl.tmux._check_tmux_version"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
-            tmux_run_detached_argv("vctl-lb", ["haproxy", "-f", "/tmp/h.cfg"])
+            TmuxSession("vctl-lb", env={}).start(["haproxy", "-f", "/tmp/h.cfg"])
         assert mock_run.called

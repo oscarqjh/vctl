@@ -55,12 +55,21 @@ def test_lb_start_spawns_watcher_when_enabled(
 
     spawned_sessions: list[str] = []
 
-    def fake_tmux(name: str, argv: list[str]) -> None:
-        spawned_sessions.append(name)
+    class _FakeTmuxSession:
+        def __init__(self, name: str, **kwargs: object) -> None:
+            self._name = name
 
-    monkeypatch.setattr(lb_mod, "_tmux_run_detached_argv", fake_tmux)
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            spawned_sessions.append(self._name)
+
+        def kill(self, *, tree: bool = True) -> None:
+            pass
+
     monkeypatch.setattr(lb_mod, "_tmux_session_exists", lambda name: False)
-    monkeypatch.setattr("vctl.lb.prune.tmux_run_detached_argv", fake_tmux)
+    monkeypatch.setattr("vctl.lb.prune._TmuxSession", _FakeTmuxSession)
 
     from vctl.commands.lb import _spawn_watcher_if_enabled
 
@@ -81,10 +90,20 @@ def test_lb_start_skips_watcher_when_disabled(
 
     spawned_sessions: list[str] = []
 
-    def fake_tmux(name: str, argv: list[str]) -> None:
-        spawned_sessions.append(name)
+    class _FakeTmuxSession:
+        def __init__(self, name: str, **kwargs: object) -> None:
+            self._name = name
 
-    monkeypatch.setattr("vctl.lb.prune.tmux_run_detached_argv", fake_tmux)
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            spawned_sessions.append(self._name)
+
+        def kill(self, *, tree: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr("vctl.lb.prune._TmuxSession", _FakeTmuxSession)
 
     from vctl.commands.lb import _spawn_watcher_if_enabled
 
@@ -108,7 +127,21 @@ def test_lb_stop_kills_watcher_session(tmp_path: Path, monkeypatch: pytest.Monke
     watch_pid.write_text("tmux:vctl-lb-watch\n")
 
     killed: list[str] = []
-    monkeypatch.setattr("vctl.lb.prune.tmux_kill", lambda name: killed.append(name))
+
+    class _FakeTmuxSession:
+        def __init__(self, name: str, **kwargs: object) -> None:
+            self._name = name
+
+        def exists(self) -> bool:
+            return True
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, *, tree: bool = True) -> None:
+            killed.append(self._name)
+
+    monkeypatch.setattr("vctl.lb.prune._TmuxSession", _FakeTmuxSession)
     monkeypatch.setattr("vctl.lb.prune.tmux_session_exists", lambda name: True)
 
     from vctl.lb.prune import _stop_watcher
@@ -127,7 +160,20 @@ def test_lb_stop_watcher_idempotent_when_not_running(
     lb = _make_lb()
     mgr = _make_mgr(tmp_path, lb=lb)
 
-    monkeypatch.setattr("vctl.lb.prune.tmux_kill", lambda name: None)
+    class _FakeTmuxSession:
+        def __init__(self, name: str, **kwargs: object) -> None:
+            self._name = name
+
+        def exists(self) -> bool:
+            return False
+
+        def start(self, argv: object) -> None:
+            pass
+
+        def kill(self, *, tree: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr("vctl.lb.prune._TmuxSession", _FakeTmuxSession)
     monkeypatch.setattr("vctl.lb.prune.tmux_session_exists", lambda name: False)
 
     from vctl.lb.prune import _stop_watcher

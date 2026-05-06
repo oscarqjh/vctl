@@ -30,7 +30,8 @@ from vctl.commands.lb import _fetch_haproxy_stats
 from vctl.duration import _parse_duration  # re-exported for callers
 from vctl.lb.errors import LbUnreachable
 from vctl.lb.runtime import lb_admin_client
-from vctl.platform import tmux_kill, tmux_run_detached_argv, tmux_session_exists
+from vctl.tmux import TmuxSession as _TmuxSession
+from vctl.tmux import tmux_session_exists
 
 if TYPE_CHECKING:
     from vctl.config.models import LbPrune
@@ -123,7 +124,7 @@ def _spawn_watcher(
         "prune",
     ]
     loop_cmd = f"while true; do {shlex.join(inner_argv)}; sleep {interval_s}; done"
-    tmux_run_detached_argv("vctl-lb-watch", ["bash", "-c", loop_cmd])
+    _TmuxSession("vctl-lb-watch").start(["bash", "-c", loop_cmd])
 
     pid_path = mgr.run_dir / "watch.pid"
     pid_path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +140,7 @@ def _stop_watcher(mgr: LbManager) -> bool:
     Idempotent: safe to call even if the watcher was never started.
     """
     was_running = tmux_session_exists("vctl-lb-watch")
-    tmux_kill("vctl-lb-watch")
+    _TmuxSession("vctl-lb-watch").kill(tree=False)
     pid_path = mgr.run_dir / "watch.pid"
     pid_path.unlink(missing_ok=True)
     return was_running

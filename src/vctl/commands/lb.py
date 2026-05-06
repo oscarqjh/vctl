@@ -12,10 +12,9 @@ from typing import TYPE_CHECKING
 
 from vctl.lb.manager import LbManager
 from vctl.lb.state import BackendState
-from vctl.platform import tmux_kill as _tmux_kill  # noqa: F401  (re-export for monkeypatch)
-from vctl.platform import tmux_run_detached_argv as _tmux_run_detached_argv  # noqa: F401
-from vctl.platform import tmux_session_exists as _tmux_session_exists
 from vctl.resolver import resolve
+from vctl.tmux import TmuxSession as _TmuxSession  # noqa: F401  (re-export for monkeypatch)
+from vctl.tmux import tmux_session_exists as _tmux_session_exists
 
 if TYPE_CHECKING:
     from rich.console import Console

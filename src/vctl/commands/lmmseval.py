@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import sys
 
-from vctl.platform import tmux_kill, tmux_run_detached, tmux_session_exists
+from vctl.tmux import TmuxSession
 
 _TMUX_NAME = "vctl-lmmseval"
 
@@ -18,25 +17,11 @@ _TASK_SH = f"{_LMMS_ROOT}/scripts/osibench_32frame/qwen3vl8binstruct.sh"
 _START_IDX = 0
 _END_IDX = 5
 
-# Env var prefixes propagated from current shell into the tmux session.
-# tmux server caches env from when first started, so vars set in the current
-# shell (e.g. HF_HOME) are missing inside `tmux new-session`. Mirror the
-# Phase 1 vllm fix (PATH override) — explicitly export at cmd entry.
-_ENV_PROPAGATE_PREFIXES = (
-    "HF_",
-    "HUGGINGFACE_",
-    "HUGGING_FACE_",
-    "TRANSFORMERS_",
-    "ACCELERATE_",
-    "TORCH_",
-    "CUDA_",
-    "NCCL_",
-    "OMP_",
-)
-
 # Pods have no internet egress to huggingface.co. Force offline mode so
-# transformers / huggingface_hub never HEAD the network even when something
-# (cache miss, processor_config.json lookup) tempts them to.
+# transformers / huggingface_hub never HEAD the network.
+# Note: full os.environ snapshot via TmuxSession means HF_HOME, CUDA_* etc.
+# from the operator's shell are propagated automatically — no more prefix
+# whitelist needed.
 _FORCED_ENV: dict[str, str] = {
     "TRANSFORMERS_OFFLINE": "1",
     "HF_HUB_OFFLINE": "1",
@@ -44,35 +29,29 @@ _FORCED_ENV: dict[str, str] = {
 }
 
 
-def _build_env_exports() -> str:
-    """Return shell `export K=V; ...` lines: forced-offline vars + every
-    env var matching `_ENV_PROPAGATE_PREFIXES`, with values shlex-quoted."""
-    propagated = {
-        k: v for k, v in os.environ.items() if any(k.startswith(p) for p in _ENV_PROPAGATE_PREFIXES)
-    }
-    # Forced vars override the shell — pods are offline regardless of operator
-    # shell state.
-    merged = {**propagated, **_FORCED_ENV}
-    pairs = sorted(merged.items())
-    return " ".join(f"export {k}={shlex.quote(v)};" for k, v in pairs)
-
-
 def _build_run_loop_cmd() -> str:
-    exports = _build_env_exports()
-    body = f"source {_VENV}/bin/activate && bash {_RUN_LOOP_SH} {_TASK_SH} {_START_IDX} {_END_IDX}"
-    return f"{exports} {body}" if exports else body
+    """Return the shell command line to run in the tmux session.
+
+    All env vars are propagated via TmuxSession's -e flags; this function
+    only builds the shell pipeline body (source activate + bash run_loop.sh).
+    """
+    return f"source {_VENV}/bin/activate && bash {_RUN_LOOP_SH} {_TASK_SH} {_START_IDX} {_END_IDX}"
 
 
 def _cmd_run_loop(_ns: argparse.Namespace) -> int:
-    if tmux_session_exists(_TMUX_NAME):
+    if TmuxSession(_TMUX_NAME).exists():
         print(
             f"tmux session {_TMUX_NAME!r} already exists. "
             f"attach: tmux attach -t {_TMUX_NAME}  |  kill: vctl lmmseval stop",
             file=sys.stderr,
         )
         return 4
+    # Full os.environ snapshot + forced offline vars ensures HF_HOME,
+    # TRANSFORMERS_OFFLINE, CUDA_*, etc. are all available in the pane
+    # regardless of how old the tmux server's environment cache is (AT-3).
+    session_env = {**os.environ, **_FORCED_ENV}
     cmd = _build_run_loop_cmd()
-    tmux_run_detached(_TMUX_NAME, cmd)
+    TmuxSession(_TMUX_NAME, env=session_env).start(cmd)
     print(f"started in tmux session {_TMUX_NAME!r}", file=sys.stderr)
     print(f"  attach: tmux attach -t {_TMUX_NAME}", file=sys.stderr)
     print(f"  cmd:    {cmd}", file=sys.stderr)
@@ -80,16 +59,17 @@ def _cmd_run_loop(_ns: argparse.Namespace) -> int:
 
 
 def _cmd_stop(_ns: argparse.Namespace) -> int:
-    if not tmux_session_exists(_TMUX_NAME):
+    if not TmuxSession(_TMUX_NAME).exists():
         print(f"tmux session {_TMUX_NAME!r} not running", file=sys.stderr)
         return 0
-    tmux_kill(_TMUX_NAME)
+    # tree=True: kill run_loop.sh + accelerate + 8 worker processes.
+    TmuxSession(_TMUX_NAME).kill(tree=True)
     print(f"killed tmux session {_TMUX_NAME!r}", file=sys.stderr)
     return 0
 
 
 def _cmd_status(_ns: argparse.Namespace) -> int:
-    if tmux_session_exists(_TMUX_NAME):
+    if TmuxSession(_TMUX_NAME).exists():
         print(f"tmux session {_TMUX_NAME!r}: running", file=sys.stderr)
         print(f"  attach: tmux attach -t {_TMUX_NAME}", file=sys.stderr)
     else:

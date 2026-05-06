@@ -3,6 +3,42 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.8.0] - 2026-05-06
+
+### Breaking Changes
+
+- **Internal API removed:** `tmux_run_detached`, `tmux_run_detached_argv`, `tmux_kill`,
+  `tmux_session_exists`, and `_validate_tmux_name` have been deleted from
+  `vctl.platform`. Any code that imported these directly must switch to
+  `from vctl.tmux import TmuxSession` (or `tmux_session_exists` /
+  `_validate_tmux_name` from `vctl.tmux`). The public CLI surface is unchanged.
+
+### Changed
+
+- **Full env propagation in all tmux sessions:** `LbManager`, `VllmManager`, and
+  `lmmseval` now pass the calling process's complete environment via
+  `tmux new-session -e KEY=VAL` (tmux 3.2+). This eliminates the class of bugs
+  where variables set in the operator's shell (PATH, HF_HOME, CUDA_VISIBLE_DEVICES,
+  etc.) were silently missing inside sessions because the tmux server cached its
+  environment at login time. Fixes the v0.5.4 ninja PATH bug, the v0.7.3
+  HF_HOME/TRANSFORMERS_OFFLINE regression, and the class of issues in AT-1–AT-3.
+- **`lmmseval` env propagation simplified:** Removed the `_ENV_PROPAGATE_PREFIXES`
+  whitelist approach. All variables in the operator's shell are now available in
+  the lmmseval session. `_FORCED_ENV` overrides (TRANSFORMERS_OFFLINE, HF_HUB_OFFLINE,
+  HF_DATASETS_OFFLINE) still take precedence.
+- **`lmmseval stop` now tree-kills workers:** `TmuxSession.kill(tree=True)` sends
+  SIGTERM to the run_loop.sh shell + all accelerate + worker processes. Previously
+  `tmux kill-session` only killed the pane shell, leaving workers as orphans.
+- **`VllmManager stop` tree-kills escaped workers:** Replaces the pidfile-poll loop
+  with `TmuxSession.kill(tree=True, grace_s=grace)`. Catches accelerate worker
+  processes that survive the pane kill. C-c (clean vllm SIGINT shutdown) is still
+  sent first.
+- **`TmuxSession` requires tmux 3.2+:** Version is checked on first `start()` call
+  per process with a clear error message. Deployed environment is tmux 3.4.
+- **haproxy env note:** `LbManager.start()` now forwards the caller's full
+  `os.environ` to haproxy's tmux session. HAProxy ignores Python-related env vars;
+  practical impact is near-zero, but documented in case of exotic deployments.
+
 ## [0.7.4] - 2026-05-06
 
 ### Fixed

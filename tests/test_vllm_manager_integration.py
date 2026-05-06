@@ -27,7 +27,8 @@ from pathlib import Path
 import psutil
 import pytest
 
-from vctl.platform import tmux_kill, tmux_session_exists
+from vctl.tmux import TmuxSession as _TmuxSession
+from vctl.tmux import tmux_session_exists
 
 
 def _free_port() -> int:
@@ -169,7 +170,7 @@ def test_at1_detached_start_survives_caller_exit(
 
     session_name = "vctl-vllm-test"
     # Ensure no stale session from a previous run.
-    tmux_kill(session_name)
+    _TmuxSession(session_name).kill(tree=False)
 
     env = {
         **os.environ,
@@ -205,7 +206,7 @@ def test_at1_detached_start_survives_caller_exit(
         assert psutil.pid_exists(pid), f"vllm process {pid} died after caller exit"
 
     finally:
-        tmux_kill(session_name)
+        _TmuxSession(session_name).kill(tree=False)
         pid_path = Path.home() / ".vctl" / "vllm" / "test.pid"
         if pid_path.exists():
             try:
