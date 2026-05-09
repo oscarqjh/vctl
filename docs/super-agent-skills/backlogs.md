@@ -2,7 +2,7 @@
 
 ## In Progress
 
-_(none — v0.7.0 shipped 2026-05-05)_
+_(none — v0.8.0 shipped 2026-05-09)_
 
 ## Up Next
 
@@ -26,6 +26,18 @@ _(none — v0.7.0 shipped 2026-05-05)_
 - **F5** *(probably wontfix)*: emit `daemon` directive in `render.py` + redirect stdout log to a file. F1's pidfile/pgrep fallback already covers status/stop; tradeoff (lose interactive `tmux attach`) outweighs the marginal pidfile cleanliness gain.
 
 ## Completed
+
+### 2026-05-09 — v0.8.0 TmuxSession refactor (unified env propagation)
+
+- **New `src/vctl/tmux.py` `TmuxSession` class** unifies tmux session management across `LbManager` (haproxy), `VllmManager` (vllm), and `lmmseval._cmd_run_loop`.
+- **Full `os.environ` snapshot at `start()` call time** via `tmux new-session -e KEY=VAL` (tmux 3.2+ required; deployed env is 3.4). Eliminates the chronic "tmux server cached env from when first started" footgun (v0.5.4 PATH, v0.7.3-0.7.4 HF_/TRANSFORMERS_OFFLINE).
+- **BREAKING (internal):** `tmux_run_detached`, `tmux_run_detached_argv`, `tmux_kill`, `tmux_session_exists`, `_validate_tmux_name` deleted from `vctl.platform`. Public CLI surface unchanged.
+- **`kill(tree=True)` tree-kill** via psutil (SIGTERM tree → wait `grace_s` → SIGKILL survivors → tmux kill-session). Catches accelerate worker processes that previously survived `tmux kill-session`.
+- **`log_path` constructor arg** consolidates pipe-pane log capture (was scattered across VllmManager).
+- 35 new unit tests in `tests/test_tmux.py` + 3 integration tests. All AT-1 through AT-10 covered.
+- platform.py shrunk from ~110 lines to 46 (only `detect_self_ip` + `which`).
+- Spec: [specs/2026-05-06-tmux-session-mgmt-design.md](specs/2026-05-06-tmux-session-mgmt-design.md) — 10 ATs.
+- Plan: [plans/2026-05-06-tmux-session-mgmt.md](plans/2026-05-06-tmux-session-mgmt.md) — 8 tasks.
 
 ### 2026-05-05 — v0.7.0 rolling-restart orchestration (Phase 3 of 3)
 
