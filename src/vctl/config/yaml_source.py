@@ -20,7 +20,7 @@ def _no_duplicate_keys(
 ) -> dict[Any, Any]:
     keys: set[object] = set()
     for key_node, _ in node.value:
-        key: object = loader.construct_object(key_node, deep=True)  # type: ignore[no-untyped-call]
+        key: object = loader.construct_object(key_node, deep=True)
         if key in keys:
             raise yaml.constructor.ConstructorError(
                 None,

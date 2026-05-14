@@ -3,9 +3,9 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "vctl"
-version = "0.8.0"
-description = "Typed CLI for orchestrating a multi-pod vLLM fleet behind HAProxy."
+name = "tctl"
+version = "0.9.0"
+description = "Typed CLI (tmux controller) for orchestrating multi-workload GPU fleets."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -35,10 +35,12 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.10",
     "types-PyYAML",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.scripts]
 vctl = "vctl.cli:main"
+tctl = "tctl.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/oscarqjh/vctl"
@@ -46,7 +48,7 @@ Repository = "https://github.com/oscarqjh/vctl.git"
 Issues = "https://github.com/oscarqjh/vctl/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/vctl"]
+packages = ["src/vctl", "src/tctl"]
 
 [tool.pytest.ini_options]
 addopts = "-ra -q"

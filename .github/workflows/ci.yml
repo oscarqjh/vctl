@@ -20,5 +20,5 @@ jobs:
       - run: uv pip install --system -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy --strict src/vctl
-      - run: pytest -q --cov=vctl --cov-report=term-missing --cov-fail-under=50
+      - run: mypy --strict src/vctl src/tctl
+      - run: pytest -q --cov=vctl --cov=tctl --cov-report=term-missing --cov-fail-under=50

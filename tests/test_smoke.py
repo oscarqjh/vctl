@@ -44,13 +44,36 @@ def test_changelog_has_v0_1_0_section() -> None:
 
 
 def test_pyproject_version_matches_module_version() -> None:
+    import sys
     from pathlib import Path  # noqa: PLC0415
 
-    import tomllib
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        try:
+            import tomllib  # type: ignore[no-redef]
+        except ImportError:
+            import tomli as tomllib  # type: ignore[no-redef]
 
     repo = Path(__file__).resolve().parent.parent
     pyproject = tomllib.loads((repo / "pyproject.toml").read_text())
     pkg_version = pyproject["project"]["version"]
     from vctl import __version__
 
-    assert pkg_version == __version__ == "0.8.0"
+    assert pkg_version == __version__ == "0.9.0"
+
+
+def test_tctl_package_importable() -> None:
+    import importlib
+
+    tctl = importlib.import_module("tctl")
+    assert hasattr(tctl, "__version__")
+    assert tctl.__version__ == "0.9.0"
+
+
+def test_tctl_version_string_format() -> None:
+    import tctl
+
+    parts = tctl.__version__.split(".")
+    assert len(parts) == 3
+    assert all(p.isdigit() for p in parts)
