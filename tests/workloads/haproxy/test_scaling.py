@@ -183,10 +183,10 @@ def test_lb_add_idempotent_first_then_dup(tmp_path: Path) -> None:
         "TCTL_TEST_NO_SOCKET": "1",
     }
 
-    p1 = _vctl("lb", "add", "10.0.0.5:8000", cwd=repo, env=env)
+    p1 = _vctl("haproxy", "add", "10.0.0.5:8000", cwd=repo, env=env)
     assert p1.returncode == 0, p1.stderr
     assert "ADDED" in p1.stderr
-    p2 = _vctl("lb", "add", "10.0.0.5:8000", cwd=repo, env=env)
+    p2 = _vctl("haproxy", "add", "10.0.0.5:8000", cwd=repo, env=env)
     assert p2.returncode == 0, p2.stderr
     assert "READIED" in p2.stderr
 
@@ -200,8 +200,8 @@ def test_lb_remove_after_add(tmp_path: Path) -> None:
         "TCTL_CLUSTER__STATE_DIR": str(tmp_path / "state"),
         "TCTL_TEST_NO_SOCKET": "1",
     }
-    _vctl("lb", "add", "10.0.0.5:8000", cwd=repo, env=env)
-    p = _vctl("lb", "remove", "10.0.0.5:8000", cwd=repo, env=env)
+    _vctl("haproxy", "add", "10.0.0.5:8000", cwd=repo, env=env)
+    p = _vctl("haproxy", "remove", "10.0.0.5:8000", cwd=repo, env=env)
     assert p.returncode == 0
 
 
@@ -216,7 +216,7 @@ def test_lb_attach_refuses_when_model_not_loaded(tmp_path: Path) -> None:
         "TCTL_TEST_NO_SOCKET": "1",
         "TCTL_TEST_PROBE_RESULT": "empty",
     }
-    p = _vctl("lb", "attach", "8000", cwd=repo, env=env)
+    p = _vctl("haproxy", "scaling", "attach", "8000", cwd=repo, env=env)
     assert p.returncode == 1
     assert "not loaded" in p.stderr.lower() or "empty" in p.stderr.lower()
 
@@ -229,9 +229,9 @@ def test_lb_attach_refuses_when_model_not_loaded(tmp_path: Path) -> None:
 def _make_two_pool_repo(tmp_path: Path) -> Path:
     """Cluster with two pools (a serves M/A, b serves M/B)."""
     (tmp_path / "cluster.yaml").write_text(
-        "apiVersion: tctl/v1\nkind: Cluster\n"
+        "apiVersion: tctl/v1\n"
         "cluster:\n  venv: /v\n  state_dir: /tmp/state\n  env: {}\n"
-        "profile: a\n"
+        "vllm:\n  default_profile: a\n"
         "haproxy:\n"
         "  kind: haproxy\n  host: 10.0.0.1\n"
         "  admin: { bind_port: 9001 }\n"
@@ -268,7 +268,7 @@ def test_lb_add_with_explicit_pool_flag(tmp_path: Path) -> None:
         "TCTL_CLUSTER__STATE_DIR": str(state),
         "TCTL_TEST_NO_SOCKET": "1",
     }
-    p = _vctl("lb", "add", "10.0.0.5:8000", "--pool", "a", cwd=repo, env=env)
+    p = _vctl("haproxy", "add", "10.0.0.5:8000", "--pool", "a", cwd=repo, env=env)
     assert p.returncode == 0, p.stderr
     assert "ADDED" in p.stderr
     assert (state / "10.0.0.1" / "a_backends.txt").read_text().strip() == "10.0.0.5:8000"
@@ -288,7 +288,7 @@ def test_lb_add_unknown_pool_exits_3(tmp_path: Path) -> None:
         "TCTL_CLUSTER__STATE_DIR": str(state),
         "TCTL_TEST_NO_SOCKET": "1",
     }
-    p = _vctl("lb", "add", "10.0.0.5:8000", "--pool", "nonexistent", cwd=repo, env=env)
+    p = _vctl("haproxy", "add", "10.0.0.5:8000", "--pool", "nonexistent", cwd=repo, env=env)
     assert p.returncode == 3
     assert "nonexistent" in p.stderr or "unknown pool" in p.stderr.lower()
 
@@ -305,9 +305,9 @@ def test_lb_remove_finds_pool_automatically(tmp_path: Path) -> None:
         "TCTL_TEST_NO_SOCKET": "1",
     }
     # Add to pool a
-    _vctl("lb", "add", "10.0.0.5:8000", "--pool", "a", cwd=repo, env=env)
+    _vctl("haproxy", "add", "10.0.0.5:8000", "--pool", "a", cwd=repo, env=env)
     # Remove without --pool — should find it in pool a
-    p = _vctl("lb", "remove", "10.0.0.5:8000", cwd=repo, env=env)
+    p = _vctl("haproxy", "remove", "10.0.0.5:8000", cwd=repo, env=env)
     assert p.returncode == 0
     assert (state / "10.0.0.1" / "a_backends.txt").read_text().strip() == ""
 

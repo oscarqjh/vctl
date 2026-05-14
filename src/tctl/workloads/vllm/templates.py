@@ -16,7 +16,6 @@ CLUSTER_TEMPLATE = """\
 #        TCTL_PROFILE=qwen3_5-9b
 
 apiVersion: tctl/v1
-kind: Cluster
 
 vllm:
   # Default profile loaded when --profile is not passed.

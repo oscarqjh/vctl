@@ -16,7 +16,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 # Keep tests env-deterministic.
-for var in ("VCTL_PROFILE", "MODEL_PROFILE", "VCTL_LB__HOST"):
+for var in ("TCTL_PROFILE", "TCTL_HAPROXY__HOST", "TCTL_TEST_NO_SOCKET"):
     os.environ.pop(var, None)
 
 
@@ -145,8 +145,8 @@ def _sweep_leaked_vctl_serve_at_session_end() -> pytest.Generator[None, None, No
             if not cmd:
                 continue
             cmd_str = " ".join(cmd)
-            # Must look like a vctl serve invocation OR a fake-vllm under a pytest tmpdir.
-            is_vctl_serve = "vctl" in cmd_str and "serve" in cmd_str
+            # Must look like a tctl vllm serve invocation OR a fake-vllm under a pytest tmpdir.
+            is_vctl_serve = "tctl" in cmd_str and "vllm" in cmd_str and "serve" in cmd_str
             is_fake_vllm = "/bin/vllm" in cmd_str
             if not (is_vctl_serve or is_fake_vllm):
                 continue
@@ -161,7 +161,7 @@ def _sweep_leaked_vctl_serve_at_session_end() -> pytest.Generator[None, None, No
         import warnings
 
         warnings.warn(
-            f"[F7] swept {killed} leaked vctl-serve/fake-vllm process(es) pointing at "
+            f"[F7] swept {killed} leaked tctl-vllm-serve/fake-vllm process(es) pointing at "
             "pytest temp paths after session end",
             stacklevel=1,
         )
