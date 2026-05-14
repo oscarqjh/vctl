@@ -239,3 +239,89 @@ def test_pool_name_with_letters_or_dashes_accepted() -> None:
     Pool.model_validate({"name": "qwen3-5-9b", "served_model": "X", "bind_port": 8080})
     Pool.model_validate({"name": "pool_a", "served_model": "X", "bind_port": 8080})
     Pool.model_validate({"name": "p1", "served_model": "X", "bind_port": 8080})  # mixed digits OK
+
+
+# ---- Task 3: tctl/v1 schema tests ----
+
+
+def _minimal_haproxy() -> dict:  # type: ignore[type-arg]
+    return {
+        "kind": "haproxy",
+        "host": "127.0.0.1",
+        "admin": {"bind_port": 9001},
+        "stats": {"bind_port": 9000},
+        "pools": [{"name": "default", "bind_port": 8000, "served_model": "*"}],
+    }
+
+
+def test_tctl_cluster_file_accepts_new_shape() -> None:
+    from tctl.config.models import ClusterFile, ClusterSection, LbHaproxy, VllmCluster
+
+    cf = ClusterFile(
+        apiVersion="tctl/v1",
+        cluster=ClusterSection(venv="/venv", state_dir="/tmp/state"),
+        haproxy=LbHaproxy(**_minimal_haproxy()),
+        vllm=VllmCluster(default_profile=None),
+    )
+    assert cf.apiVersion == "tctl/v1"
+    assert cf.vllm.default_profile is None
+
+
+def test_tctl_cluster_file_rejects_old_lb_key() -> None:
+    from pydantic import ValidationError
+
+    from tctl.config.models import ClusterFile
+
+    with pytest.raises(ValidationError):
+        ClusterFile.model_validate(
+            {
+                "apiVersion": "tctl/v1",
+                "cluster": {"venv": "/venv", "state_dir": "/tmp"},
+                "lb": _minimal_haproxy(),  # old key — should be rejected
+            }
+        )
+
+
+def test_tctl_cluster_file_rejects_top_level_profile() -> None:
+    from pydantic import ValidationError
+
+    from tctl.config.models import ClusterFile
+
+    with pytest.raises(ValidationError):
+        ClusterFile.model_validate(
+            {
+                "apiVersion": "tctl/v1",
+                "cluster": {"venv": "/venv", "state_dir": "/tmp"},
+                "haproxy": _minimal_haproxy(),
+                "profile": "foo",  # old top-level field — must be rejected
+            }
+        )
+
+
+def test_tctl_cluster_file_rejects_old_api_version() -> None:
+    from pydantic import ValidationError
+
+    from tctl.config.models import ClusterFile
+
+    with pytest.raises(ValidationError):
+        ClusterFile.model_validate(
+            {
+                "apiVersion": "vctl/v1",  # old literal
+                "cluster": {"venv": "/venv", "state_dir": "/tmp"},
+                "haproxy": _minimal_haproxy(),
+            }
+        )
+
+
+def test_tctl_vllm_cluster_default_profile_none() -> None:
+    from tctl.config.models import VllmCluster
+
+    vc = VllmCluster()
+    assert vc.default_profile is None
+
+
+def test_tctl_vllm_cluster_default_profile_roundtrip() -> None:
+    from tctl.config.models import VllmCluster
+
+    vc = VllmCluster(default_profile="foo")
+    assert vc.default_profile == "foo"

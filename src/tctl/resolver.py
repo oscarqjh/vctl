@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from tctl.config.models import (  # type: ignore[import-not-found]
+    from tctl.config.models import (
         ClusterSection,
         LbHaproxy,
         Model,
@@ -76,7 +76,7 @@ def resolve(config_path: Path | str, profile: str | None) -> ResolvedConfig:
     # (Task 3 creates those modules; calling resolve() before Task 3 will
     # raise ImportError at this point, not at module-import time).
     from tctl.config.models import LbHaproxy as _LbHaproxy  # noqa: PLC0415
-    from tctl.config.settings import (  # type: ignore[import-not-found]  # noqa: PLC0415
+    from tctl.config.settings import (  # noqa: PLC0415
         load_cluster_file,
         load_profile_file,
         resolve_profile_name,
@@ -84,23 +84,28 @@ def resolve(config_path: Path | str, profile: str | None) -> ResolvedConfig:
 
     cluster_path = Path(config_path).resolve()
     cf = load_cluster_file(cluster_path)
-    profile_name = resolve_profile_name(profile, cf.profile)
+    profile_name = resolve_profile_name(profile, cf)
+    if not profile_name:
+        raise ValueError(
+            "no profile specified — pass --profile, set $TCTL_PROFILE, "
+            "or set vllm.default_profile in cluster.yaml"
+        )
     # D8: reject path-traversal in profile names
     _validate_profile_name(profile_name)
     profile_path = (cluster_path.parent / "models" / f"{profile_name}.yaml").resolve()
     if not profile_path.exists():
         raise FileNotFoundError(
             f"profile '{profile_name}' not found at {profile_path}; "
-            "see `tctl profiles` for available choices"
+            "see `tctl vllm profiles` for available choices"
         )
     pf = load_profile_file(profile_path)
     merged_env = _deep_merge(cf.cluster.env or {}, pf.env or {})
-    if not isinstance(cf.lb, _LbHaproxy):
-        raise TypeError(f"unsupported lb.kind {cf.lb.kind!r}")
+    if not isinstance(cf.haproxy, _LbHaproxy):
+        raise TypeError(f"unsupported haproxy.kind {cf.haproxy.kind!r}")
     return ResolvedConfig(
         profile_name=profile_name,
         cluster=cf.cluster,
-        lb=cf.lb,
+        lb=cf.haproxy,
         model=pf.model,
         resources=pf.resources,
         parallelism=pf.parallelism,
