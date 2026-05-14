@@ -2,7 +2,7 @@
 
 ## In Progress
 
-_(none — v0.8.0 shipped 2026-05-09)_
+- **vctl → tctl rename + workload reorg (v0.9.0).** Rename project to `tctl` and reorganize into workload sub-command groups (`tctl vllm`, `tctl haproxy`, `tctl lmms`) for easy extension (e.g. future `tctl lmdeploy`). Breaking: cluster.yaml schema (`lb:` → `haproxy:`, top-level `profile:` → `vllm.default_profile`), env vars (`VCTL_*` → `TCTL_*`), state paths (`~/.vctl/*` → `~/.tctl/*`), tmux session names. No backwards compat. Spec: [specs/2026-05-09-tctl-rename-workload-reorg-design.md](specs/2026-05-09-tctl-rename-workload-reorg-design.md) — 12 ATs.
 
 ## Up Next
 
