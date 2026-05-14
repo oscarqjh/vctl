@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from vctl.platform import detect_self_ip, which
+from tctl.platform import detect_self_ip, which
 
 
 def test_detect_self_ip_returns_string() -> None:

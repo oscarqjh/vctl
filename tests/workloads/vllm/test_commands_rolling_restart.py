@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import argparse as _argparse
-import json as _json
 import subprocess as _subprocess
 from pathlib import Path
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -64,9 +62,7 @@ def test_rolling_restart_uses_manager_session_path(
 # ---------------------------------------------------------------------------
 
 
-def test_rolling_restart_dry_run_no_ssh(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_rolling_restart_dry_run_no_ssh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--dry-run must not ssh; session file not written."""
     from tctl.workloads.haproxy.state import BackendState
     from tctl.workloads.vllm import commands as cmds
@@ -89,19 +85,25 @@ def test_rolling_restart_dry_run_no_ssh(
 
     monkeypatch.setattr(lbm, "LbManager", lambda *a, **kw: mgr)
 
-    from tctl.config.models import ClusterSection, LbAdmin, LbDefaults, LbHaproxy, LbHealth, LbStats, Pool, VllmCluster
-    from tctl.config.models import ClusterFile
+    from tctl.config.models import (
+        ClusterSection,
+    )
 
-    mock_rc = type("RC", (), {
-        "cluster": ClusterSection(venv="/v", state_dir=str(state_dir)),
-        "lb": mgr.lb,
-        "profile_name": "test",
-    })()
+    mock_rc = type(
+        "RC",
+        (),
+        {
+            "cluster": ClusterSection(venv="/v", state_dir=str(state_dir)),
+            "lb": mgr.lb,
+            "profile_name": "test",
+        },
+    )()
 
     monkeypatch.setattr("tctl.resolver.resolve", lambda *a, **kw: mock_rc)
 
     # Patch _cmd_rolling_restart's subprocess import to spy on ssh
     import subprocess as subprocess_mod
+
     monkeypatch.setattr(subprocess_mod, "run", _fake_run)
 
     ns = _argparse.Namespace(
@@ -121,6 +123,7 @@ def test_rolling_restart_dry_run_no_ssh(
 
     # Use a tmp rolling-restart path
     from tctl.workloads.vllm.manager import VllmManager
+
     vm = VllmManager.__new__(VllmManager)
     session_path = vm._rolling_restart_session_path("mypool", state_dir=tmp_path / "rr")
     assert not session_path.exists(), "session file must not exist before dry-run"

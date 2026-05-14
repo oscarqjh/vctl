@@ -1,4 +1,4 @@
-"""Smoke tests for vctl CLI startup."""
+"""Smoke tests for tctl CLI startup."""
 
 from __future__ import annotations
 
@@ -7,30 +7,37 @@ import sys
 import time
 
 
-def test_help_runs_quickly() -> None:
-    """`vctl --help` must complete in <200 ms (AT-1).
-
-    We invoke via `python -m vctl` so we never accidentally measure a
-    different `vctl` shim from PATH.
-    """
-    args = [sys.executable, "-m", "vctl"]
+def test_tctl_help_runs_quickly() -> None:
+    """`tctl --help` must complete in <400 ms (AT-startup)."""
+    args = [sys.executable, "-m", "tctl"]
     t0 = time.perf_counter()
     proc = subprocess.run([*args, "--help"], capture_output=True, text=True, timeout=5)
     elapsed_ms = (time.perf_counter() - t0) * 1000
     assert proc.returncode == 0, proc.stderr
-    assert "vctl" in proc.stdout.lower()
+    assert "tctl" in proc.stdout.lower() or "vllm" in proc.stdout.lower()
     assert elapsed_ms < 400, f"help took {elapsed_ms:.0f} ms (>400 ms budget)"
 
 
-def test_module_entry_point() -> None:
-    """`python -m vctl --help` must work."""
+def test_tctl_module_entry_point() -> None:
+    """`python -m tctl --help` must work."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "tctl", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert proc.returncode == 0
+
+
+def test_vctl_module_not_importable() -> None:
+    """`python -m vctl` must fail with a non-zero exit (module gone)."""
     proc = subprocess.run(
         [sys.executable, "-m", "vctl", "--help"],
         capture_output=True,
         text=True,
         timeout=5,
     )
-    assert proc.returncode == 0
+    assert proc.returncode != 0
 
 
 def test_changelog_has_v0_1_0_section() -> None:
@@ -58,7 +65,7 @@ def test_pyproject_version_matches_module_version() -> None:
     repo = Path(__file__).resolve().parent.parent
     pyproject = tomllib.loads((repo / "pyproject.toml").read_text())
     pkg_version = pyproject["project"]["version"]
-    from vctl import __version__
+    from tctl import __version__
 
     assert pkg_version == __version__ == "0.9.0"
 

@@ -1,13 +1,11 @@
-"""tests/workloads/vllm/test_commands_readonly.py — info / args / preflight / profiles unit tests."""
+"""tests/workloads/vllm/test_commands_readonly.py — info / args / preflight / profiles tests."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -76,9 +74,7 @@ def test_cmd_info_returns_0_with_valid_config(
     assert rc == 0
 
 
-def test_cmd_info_no_profile_returns_2(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cmd_info_no_profile_returns_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """info without a resolvable profile returns rc=2."""
     # Write cluster.yaml with no default_profile
     (tmp_path / "cluster.yaml").write_text(
@@ -109,9 +105,7 @@ def test_cmd_args_importable() -> None:
     assert callable(_cmd_args)
 
 
-def test_cmd_args_emits_flags(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cmd_args_emits_flags(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     from tctl.workloads.vllm import commands as cmds
 
@@ -165,9 +159,7 @@ def test_cmd_profiles_importable() -> None:
     assert callable(_cmd_profiles)
 
 
-def test_cmd_profiles_list_returns_0(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cmd_profiles_list_returns_0(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     from tctl.workloads.vllm import commands as cmds
 

@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # _resolve_ready_timeout
 # ---------------------------------------------------------------------------
@@ -76,9 +75,7 @@ def test_resolve_ready_timeout_bad_value_uses_default(monkeypatch: pytest.Monkey
 # ---------------------------------------------------------------------------
 
 
-def test_serve_sub_verb_status_dispatched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_serve_sub_verb_status_dispatched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """serve status argv dispatches to _cmd_serve_status."""
     import tctl.workloads.vllm.commands as cmds
 
@@ -95,9 +92,7 @@ def test_serve_sub_verb_status_dispatched(
     assert dispatched == ["status"]
 
 
-def test_serve_sub_verb_restart_dispatched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_serve_sub_verb_restart_dispatched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """serve restart argv dispatches to _cmd_serve_restart."""
     import tctl.workloads.vllm.commands as cmds
 
@@ -125,7 +120,7 @@ def test_serve_has_correct_sub_verbs() -> None:
     """serve sub-verbs are exactly: status, restart, console, logs."""
     from tctl.workloads.vllm.commands import _SERVE_SUB_VERBS
 
-    assert _SERVE_SUB_VERBS == {"status", "restart", "console", "logs"}
+    assert {"status", "restart", "console", "logs"} == _SERVE_SUB_VERBS
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +134,6 @@ def test_detached_start_calls_vllm_manager_start(
     """_serve_detached() instantiates VllmManager and calls start()."""
     import tctl.workloads.vllm.commands as cmds
     import tctl.workloads.vllm.manager as vm_mod
-
     from tests.workloads.vllm.test_manager import _make_rc
 
     rc_obj = _make_rc()
@@ -173,9 +167,7 @@ def test_detached_start_calls_vllm_manager_start(
 # ---------------------------------------------------------------------------
 
 
-def test_serve_logs_prune_calls_vm_logs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_serve_logs_prune_calls_vm_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """serve logs --prune calls vm.logs(prune=True)."""
     import tctl.workloads.vllm.commands as cmds
     import tctl.workloads.vllm.manager as vm_mod

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from vctl.duration import _parse_duration
+from tctl.duration import _parse_duration
 
 
 def test_parse_seconds() -> None:

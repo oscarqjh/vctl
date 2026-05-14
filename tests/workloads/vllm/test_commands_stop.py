@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # AT-8: merged stop — drain + tmux-kill + process sweep
@@ -22,9 +22,7 @@ def _write_cfg(cfg_file: Path) -> None:
     )
 
 
-def test_at8_stop_calls_drain_kill_sweep(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_at8_stop_calls_drain_kill_sweep(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """AT-8: tctl vllm stop performs all 3 actions: drain + tmux-kill + sweep."""
     drain_calls: list[str] = []
     kill_calls: list[str] = []
@@ -46,8 +44,9 @@ def test_at8_stop_calls_drain_kill_sweep(
     cfg_file = tmp_path / "cluster.yaml"
     _write_cfg(cfg_file)
 
-    import tctl.workloads.vllm.commands as cmds
     import argparse
+
+    import tctl.workloads.vllm.commands as cmds
 
     ns = argparse.Namespace(config=str(cfg_file), profile="myprofile")
     rc = cmds._cmd_stop(ns, [])
@@ -67,9 +66,7 @@ def test_at8_stop_sweep_runs_even_if_drain_fails(
         raise RuntimeError("LB unreachable")
 
     monkeypatch.setattr("tctl.workloads.vllm.commands._drain_from_lb", _drain_raises)
-    monkeypatch.setattr(
-        "tctl.workloads.vllm.commands._kill_tmux_session", lambda name: None
-    )
+    monkeypatch.setattr("tctl.workloads.vllm.commands._kill_tmux_session", lambda name: None)
     monkeypatch.setattr(
         "tctl.workloads.vllm.commands._sweep_local_vllm", lambda: sweep_calls.append(True)
     )
@@ -77,8 +74,9 @@ def test_at8_stop_sweep_runs_even_if_drain_fails(
     cfg_file = tmp_path / "cluster.yaml"
     _write_cfg(cfg_file)
 
-    import tctl.workloads.vllm.commands as cmds
     import argparse
+
+    import tctl.workloads.vllm.commands as cmds
 
     ns = argparse.Namespace(config=str(cfg_file), profile="myprofile")
     rc = cmds._cmd_stop(ns, [])
@@ -87,15 +85,14 @@ def test_at8_stop_sweep_runs_even_if_drain_fails(
     assert sweep_calls, "sweep must run even when drain fails"
 
 
-def test_at8_stop_no_profile_returns_2(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_at8_stop_no_profile_returns_2(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """AT-8: stop without a profile returns rc=2."""
     cfg_file = tmp_path / "cluster.yaml"
     _write_cfg(cfg_file)
 
-    import tctl.workloads.vllm.commands as cmds
     import argparse
+
+    import tctl.workloads.vllm.commands as cmds
 
     ns = argparse.Namespace(config=str(cfg_file), profile=None)
     rc = cmds._cmd_stop(ns, [])
@@ -109,14 +106,18 @@ def test_at8_stop_kill_called_with_correct_session_name(
     killed: list[str] = []
 
     monkeypatch.setattr("tctl.workloads.vllm.commands._drain_from_lb", lambda p, c: None)
-    monkeypatch.setattr("tctl.workloads.vllm.commands._kill_tmux_session", lambda n: killed.append(n))
+    monkeypatch.setattr(
+        "tctl.workloads.vllm.commands._kill_tmux_session",
+        lambda n: killed.append(n),
+    )
     monkeypatch.setattr("tctl.workloads.vllm.commands._sweep_local_vllm", lambda: None)
 
     cfg_file = tmp_path / "cluster.yaml"
     _write_cfg(cfg_file)
 
-    import tctl.workloads.vllm.commands as cmds
     import argparse
+
+    import tctl.workloads.vllm.commands as cmds
 
     ns = argparse.Namespace(config=str(cfg_file), profile="qwen3-9b")
     rc = cmds._cmd_stop(ns, [])

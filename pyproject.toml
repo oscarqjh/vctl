@@ -39,7 +39,6 @@ dev = [
 ]
 
 [project.scripts]
-vctl = "vctl.cli:main"
 tctl = "tctl.cli:main"
 
 [project.urls]
@@ -48,7 +47,7 @@ Repository = "https://github.com/oscarqjh/vctl.git"
 Issues = "https://github.com/oscarqjh/vctl/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/vctl", "src/tctl"]
+packages = ["src/tctl"]
 
 [tool.pytest.ini_options]
 addopts = "-ra -q"

@@ -22,7 +22,7 @@ def _fake_ok() -> subprocess.CompletedProcess[str]:
 
 
 def test_validate_tmux_name_valid() -> None:
-    from vctl.tmux import _validate_tmux_name
+    from tctl.tmux import _validate_tmux_name
 
     _validate_tmux_name("vctl-lb")  # no exception
     _validate_tmux_name("vctl.lb")  # dots allowed
@@ -30,21 +30,21 @@ def test_validate_tmux_name_valid() -> None:
 
 
 def test_validate_tmux_name_rejects_slash() -> None:
-    from vctl.tmux import _validate_tmux_name
+    from tctl.tmux import _validate_tmux_name
 
     with pytest.raises(ValueError, match="invalid tmux session name"):
         _validate_tmux_name("bad/name")
 
 
 def test_validate_tmux_name_rejects_empty() -> None:
-    from vctl.tmux import _validate_tmux_name
+    from tctl.tmux import _validate_tmux_name
 
     with pytest.raises(ValueError, match="invalid tmux session name"):
         _validate_tmux_name("")
 
 
 def test_validate_tmux_name_rejects_space() -> None:
-    from vctl.tmux import _validate_tmux_name
+    from tctl.tmux import _validate_tmux_name
 
     with pytest.raises(ValueError, match="invalid tmux session name"):
         _validate_tmux_name("bad name")
@@ -55,10 +55,10 @@ def test_validate_tmux_name_rejects_space() -> None:
 def test_at10_invalid_name_raises_at_init(bad_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     run_calls: list[list[str]] = []
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda a, **k: run_calls.append(a) or _fake_ok(),
     )
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     with pytest.raises(ValueError, match="invalid tmux session name"):
         TmuxSession(bad_name)
@@ -73,13 +73,13 @@ def test_at10_invalid_name_raises_at_init(bad_name: str, monkeypatch: pytest.Mon
 def test_start_list_form_passes_env_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     """List-form argv is shlex-joined; env dict becomes -e KEY=VAL flags."""
     calls: list[list[str]] = []
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda argv, **kw: calls.append(list(argv)) or _fake_ok(),
     )
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
+    from tctl.tmux import TmuxSession
 
     sess = TmuxSession("test-sess", env={"FOO": "bar", "BAZ": "qux"})
     sess.start(["echo", "hello"])
@@ -94,13 +94,13 @@ def test_start_list_form_passes_env_flags(monkeypatch: pytest.MonkeyPatch) -> No
 def test_start_str_form_passed_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
     """Str-form argv is forwarded verbatim as the final tmux argument."""
     calls: list[list[str]] = []
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda argv, **kw: calls.append(list(argv)) or _fake_ok(),
     )
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
+    from tctl.tmux import TmuxSession
 
     sess = TmuxSession("test-sess", env={})
     sess.start("source /venv/bin/activate && bash run.sh")
@@ -111,14 +111,14 @@ def test_env_none_snapshots_at_start_time(monkeypatch: pytest.MonkeyPatch) -> No
     """Headline behavior: env=None snapshots os.environ at start() call time,
     NOT at __init__ time.  This is what fixes the stale-tmux-server-cache footgun."""
     calls: list[list[str]] = []
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda argv, **kw: calls.append(list(argv)) or _fake_ok(),
     )
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
     monkeypatch.setenv("VCTL_TEST_KEY", "before_init")
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     sess = TmuxSession("test-sess")  # env=None — must NOT snapshot os.environ now
     monkeypatch.setenv("VCTL_TEST_KEY", "after_init_before_start")
@@ -131,9 +131,9 @@ def test_env_none_snapshots_at_start_time(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_validate_env_rejects_key_with_equals(monkeypatch: pytest.MonkeyPatch) -> None:
     """_validate_env rejects env keys that contain '='."""
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
+    from tctl.tmux import TmuxSession
 
     sess = TmuxSession("test-sess", env={"K=BAD": "v"})
     with pytest.raises(ValueError, match="invalid env key"):
@@ -142,9 +142,9 @@ def test_validate_env_rejects_key_with_equals(monkeypatch: pytest.MonkeyPatch) -
 
 def test_validate_env_rejects_value_with_newline(monkeypatch: pytest.MonkeyPatch) -> None:
     """_validate_env rejects env values containing newline."""
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
+    from tctl.tmux import TmuxSession
 
     sess = TmuxSession("test-sess", env={"K": "value\nwith\nnewline"})
     with pytest.raises(ValueError, match="newline or NUL"):
@@ -154,14 +154,14 @@ def test_validate_env_rejects_value_with_newline(monkeypatch: pytest.MonkeyPatch
 # AT-7: start() raises RuntimeError when session already exists
 def test_at7_start_raises_on_existing_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """AT-7: RuntimeError raised if session already exists; no new-session issued."""
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: True)
     run_calls: list[list[str]] = []
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda a, **k: run_calls.append(list(a)) or _fake_ok(),
     )
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     with pytest.raises(RuntimeError, match="already exists"):
         TmuxSession("vctl-lb", env={}).start(["haproxy"])
@@ -172,15 +172,15 @@ def test_start_raises_runtime_if_tmux_not_installed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """start() raises RuntimeError when tmux binary is not on PATH."""
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
 
     def fake_run(argv: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
         raise FileNotFoundError
 
-    monkeypatch.setattr("vctl.tmux.subprocess.run", fake_run)
+    monkeypatch.setattr("tctl.tmux.subprocess.run", fake_run)
     # Reset version cache so the FileNotFoundError bubbles from _check_tmux_version
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", None)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", None)
+    from tctl.tmux import TmuxSession
 
     sess = TmuxSession("vctl-lb", env={})
     with pytest.raises(RuntimeError, match="tmux not installed"):
@@ -193,14 +193,14 @@ def test_check_tmux_version_rejects_old_version(
     """_check_tmux_version raises RuntimeError for tmux < 3.2."""
     import subprocess as _sp
 
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", None)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", None)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda argv, **kw: _sp.CompletedProcess(
             args=argv, returncode=0, stdout="tmux 3.1\n", stderr=""
         ),
     )
-    from vctl.tmux import _check_tmux_version
+    from tctl.tmux import _check_tmux_version
 
     with pytest.raises(RuntimeError, match="tmux 3.2\\+ required"):
         _check_tmux_version()
@@ -210,13 +210,13 @@ def test_check_tmux_version_rejects_old_version(
 def test_at1_vllm_path_in_env_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     """AT-1: PATH set in env dict appears as -e PATH=... in tmux new-session call."""
     calls: list[list[str]] = []
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda a, **k: calls.append(list(a)) or _fake_ok(),
     )
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
+    from tctl.tmux import TmuxSession
 
     sess = TmuxSession("vctl-vllm-qwen", env={"PATH": "/venv/bin:/usr/bin"})
     sess.start(["vllm", "serve", "model"])
@@ -228,13 +228,13 @@ def test_at1_vllm_path_in_env_flags(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_at2_lb_manager_env_propagated(monkeypatch: pytest.MonkeyPatch) -> None:
     """AT-2: CUSTOM_VAR in env dict appears in tmux new-session argv."""
     calls: list[list[str]] = []
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda a, **k: calls.append(list(a)) or _fake_ok(),
     )
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
+    from tctl.tmux import TmuxSession
 
     sess = TmuxSession("vctl-lb", env={"CUSTOM_VAR": "sentinel"})
     sess.start(["haproxy", "-f", "/tmp/ha.cfg"])
@@ -242,14 +242,14 @@ def test_at2_lb_manager_env_propagated(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_validate_env_rejects_empty_key():
-    from vctl.tmux import _validate_env
+    from tctl.tmux import _validate_env
 
     with pytest.raises(ValueError, match="empty or contains '='"):
         _validate_env({"": "v"})
 
 
 def test_validate_env_rejects_nul_value():
-    from vctl.tmux import _validate_env
+    from tctl.tmux import _validate_env
 
     with pytest.raises(ValueError, match="newline or NUL"):
         _validate_env({"K": "value\x00with\x00nul"})
@@ -257,18 +257,18 @@ def test_validate_env_rejects_nul_value():
 
 def test_check_tmux_version_accepts_3_4(monkeypatch):
     """tmux 3.4 (deployed env) is accepted; cached flag set True."""
-    import vctl.tmux as t
+    import tctl.tmux as t
 
     t._TMUX_VERSION_OK = None
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="tmux 3.4\n", stderr=""),
     )
     t._check_tmux_version()
     assert t._TMUX_VERSION_OK is True
     # Calling again should be a no-op (cached) — stub now raises if called.
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda argv, **kw: (_ for _ in ()).throw(AssertionError("should not be called")),
     )
     t._check_tmux_version()  # cached, no subprocess
@@ -283,14 +283,14 @@ def test_check_tmux_version_accepts_3_4(monkeypatch):
 def test_at9_log_path_emits_pipe_pane(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """AT-9: When log_path is given, a second subprocess.run with pipe-pane is issued."""
     calls: list[list[str]] = []
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda a, **k: calls.append(list(a)) or _fake_ok(),
     )
     log = tmp_path / "out.log"
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     TmuxSession("vctl-vllm-qwen", env={}, log_path=log).start(["vllm"])
     pipe_calls = [c for c in calls if "pipe-pane" in c]
@@ -303,13 +303,13 @@ def test_no_log_path_skips_pipe_pane(
 ) -> None:
     """Without log_path, no pipe-pane subprocess is issued."""
     calls: list[list[str]] = []
-    monkeypatch.setattr("vctl.tmux._TMUX_VERSION_OK", True)
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    monkeypatch.setattr("tctl.tmux._TMUX_VERSION_OK", True)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda a, **k: calls.append(list(a)) or _fake_ok(),
     )
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     TmuxSession("vctl-lb", env={}).start(["haproxy", "-f", "/tmp/h.cfg"])
     pipe_calls = [c for c in calls if "pipe-pane" in c]
@@ -322,7 +322,7 @@ def test_log_path_captures_output(tmp_path: Path) -> None:
     """Integration: log_path receives stdout via pipe-pane."""
     import time
 
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     name = "vctl-test-log"
     log = tmp_path / "session.log"
@@ -345,11 +345,11 @@ def test_exists_delegates_to_tmux_session_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """exists() is a thin wrapper around tmux_session_exists."""
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: True)
+    from tctl.tmux import TmuxSession
 
     assert TmuxSession("vctl-lb").exists() is True
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
     assert TmuxSession("vctl-lb").exists() is False
 
 
@@ -358,8 +358,8 @@ def test_pane_pid_parses_output(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess as _sp
 
     result = _sp.CompletedProcess(args=[], returncode=0, stdout="12345\n", stderr="")
-    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **kw: result)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.subprocess.run", lambda *a, **kw: result)
+    from tctl.tmux import TmuxSession
 
     assert TmuxSession("vctl-vllm-qwen", env={}).pane_pid() == 12345
 
@@ -369,8 +369,8 @@ def test_pane_pid_returns_none_if_session_gone(monkeypatch: pytest.MonkeyPatch) 
     import subprocess as _sp
 
     result = _sp.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
-    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **kw: result)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.subprocess.run", lambda *a, **kw: result)
+    from tctl.tmux import TmuxSession
 
     assert TmuxSession("gone", env={}).pane_pid() is None
 
@@ -382,8 +382,8 @@ def test_pane_pid_returns_none_on_empty_output(
     import subprocess as _sp
 
     result = _sp.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **kw: result)
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.subprocess.run", lambda *a, **kw: result)
+    from tctl.tmux import TmuxSession
 
     assert TmuxSession("vctl-lb", env={}).pane_pid() is None
 
@@ -391,13 +391,13 @@ def test_pane_pid_returns_none_on_empty_output(
 # AT-8: kill is idempotent when session already gone
 def test_at8_kill_idempotent_when_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     """AT-8: kill() is a no-op and raises no error when session does not exist."""
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: False)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: False)
     run_calls: list[list[str]] = []
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda a, **k: run_calls.append(list(a)) or _fake_ok(),
     )
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     TmuxSession("vctl-lb").kill()  # must not raise
     assert not run_calls
@@ -407,18 +407,18 @@ def test_at8_kill_idempotent_when_gone(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_at6_lb_stop_tree_false_no_psutil(monkeypatch: pytest.MonkeyPatch) -> None:
     """AT-6: kill(tree=False) skips psutil.Process; tmux kill-session IS called."""
     run_calls: list[list[str]] = []
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: True)
     monkeypatch.setattr(
-        "vctl.tmux.subprocess.run",
+        "tctl.tmux.subprocess.run",
         lambda a, **k: run_calls.append(list(a)) or _fake_ok(),
     )
-    monkeypatch.setattr("vctl.tmux.TmuxSession.pane_pid", lambda self: 999)
+    monkeypatch.setattr("tctl.tmux.TmuxSession.pane_pid", lambda self: 999)
     psutil_calls: list[int] = []
     monkeypatch.setattr(
-        "vctl.tmux.psutil.Process",
+        "tctl.tmux.psutil.Process",
         lambda pid: psutil_calls.append(pid),
     )
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     TmuxSession("vctl-lb").kill(tree=False)
     assert not psutil_calls
@@ -431,7 +431,7 @@ def test_session_start_exists_kill_roundtrip(tmp_path: Path) -> None:
     """Integration: start → exists → pane_pid → kill roundtrip."""
     import time
 
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     name = "vctl-test-integration"
     sess = TmuxSession(name, env={"VCTL_TMUX_TEST": "1"})
@@ -470,12 +470,12 @@ def test_at4_serve_stop_tree_kills_workers(monkeypatch: pytest.MonkeyPatch) -> N
         def children(self, recursive: bool = False) -> list[FakeProc]:
             return [FakeProc(1001), FakeProc(1002)]
 
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
-    monkeypatch.setattr("vctl.tmux.TmuxSession.pane_pid", lambda s: 1000)
-    monkeypatch.setattr("vctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
-    monkeypatch.setattr("vctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], []))
-    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr("tctl.tmux.TmuxSession.pane_pid", lambda s: 1000)
+    monkeypatch.setattr("tctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
+    monkeypatch.setattr("tctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], []))
+    monkeypatch.setattr("tctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
+    from tctl.tmux import TmuxSession
 
     TmuxSession("vctl-vllm-qwen").kill(tree=True)
     assert set(sigtermed) == {1000, 1001, 1002}
@@ -501,12 +501,12 @@ def test_at5_lmmseval_stop_tree_kills_8_workers(
         def children(self, recursive: bool = False) -> list[FakeProc]:
             return [FakeProc(p) for p in range(2001, 2009)]
 
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
-    monkeypatch.setattr("vctl.tmux.TmuxSession.pane_pid", lambda s: 2000)
-    monkeypatch.setattr("vctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
-    monkeypatch.setattr("vctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], []))
-    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr("tctl.tmux.TmuxSession.pane_pid", lambda s: 2000)
+    monkeypatch.setattr("tctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
+    monkeypatch.setattr("tctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], []))
+    monkeypatch.setattr("tctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
+    from tctl.tmux import TmuxSession
 
     TmuxSession("vctl-lmmseval").kill(tree=True)
     assert set(sigtermed) == set(range(2000, 2009))
@@ -533,13 +533,13 @@ def test_kill_tree_sigkills_survivors_after_grace(
 
     survivor = FakeProc(5000)
 
-    monkeypatch.setattr("vctl.tmux.tmux_session_exists", lambda _: True)
-    monkeypatch.setattr("vctl.tmux.TmuxSession.pane_pid", lambda s: 5000)
-    monkeypatch.setattr("vctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
+    monkeypatch.setattr("tctl.tmux.tmux_session_exists", lambda _: True)
+    monkeypatch.setattr("tctl.tmux.TmuxSession.pane_pid", lambda s: 5000)
+    monkeypatch.setattr("tctl.tmux.psutil.Process", lambda pid: FakeProc(pid))
     # Simulate wait_procs returning one survivor (root process)
-    monkeypatch.setattr("vctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], [survivor]))
-    monkeypatch.setattr("vctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
-    from vctl.tmux import TmuxSession
+    monkeypatch.setattr("tctl.tmux.psutil.wait_procs", lambda procs, timeout: ([], [survivor]))
+    monkeypatch.setattr("tctl.tmux.subprocess.run", lambda *a, **k: _fake_ok())
+    from tctl.tmux import TmuxSession
 
     TmuxSession("vctl-vllm-qwen").kill(tree=True, grace_s=0.01)
     assert 5000 in sigkilled  # survivor received SIGKILL
@@ -564,7 +564,7 @@ def test_env_propagation_into_session(tmp_path: Path) -> None:
     """Integration: env vars passed via -e actually reach the pane process."""
     import time
 
-    from vctl.tmux import TmuxSession
+    from tctl.tmux import TmuxSession
 
     name = "vctl-test-env"
     marker_file = tmp_path / "env_marker.txt"
