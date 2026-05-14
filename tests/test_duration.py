@@ -45,3 +45,14 @@ def test_parse_float_suffix_raises() -> None:
 def test_parse_plain_digits_raises() -> None:
     with pytest.raises(ValueError, match="invalid duration"):
         _parse_duration("abc")
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — tctl.duration importability
+# ---------------------------------------------------------------------------
+
+
+def test_tctl_duration_importable() -> None:
+    from tctl.duration import parse_duration
+
+    assert callable(parse_duration)

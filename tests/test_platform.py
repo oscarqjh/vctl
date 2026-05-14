@@ -24,3 +24,14 @@ def test_which_raises_when_missing(mock_which) -> None:
 
     with pytest.raises(FileNotFoundError):
         which("definitely-not-on-path-zzzz")
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — tctl.platform importability
+# ---------------------------------------------------------------------------
+
+
+def test_tctl_platform_importable() -> None:
+    from tctl.platform import detect_self_ip as tctl_detect_self_ip
+
+    assert callable(tctl_detect_self_ip)

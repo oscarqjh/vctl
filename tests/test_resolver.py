@@ -57,3 +57,14 @@ def test_resolved_config_is_frozen(repo: Path) -> None:
     rc = resolve(repo / "cluster.yaml", profile=None)
     with pytest.raises((AttributeError, TypeError)):
         rc.profile_name = "other"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — tctl.resolver importability
+# ---------------------------------------------------------------------------
+
+
+def test_tctl_resolver_importable() -> None:
+    from tctl.resolver import resolve as tctl_resolve
+
+    assert callable(tctl_resolve)

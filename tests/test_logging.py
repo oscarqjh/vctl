@@ -35,3 +35,14 @@ def test_log_level_threshold(capsys) -> None:
     err = capsys.readouterr().err
     assert "should appear" in err
     assert "should not appear" not in err
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — tctl.logging importability
+# ---------------------------------------------------------------------------
+
+
+def test_tctl_logging_importable() -> None:
+    from tctl.logging import configure as tctl_configure
+
+    assert callable(tctl_configure)

@@ -545,6 +545,19 @@ def test_kill_tree_sigkills_survivors_after_grace(
     assert 5000 in sigkilled  # survivor received SIGKILL
 
 
+# ---------------------------------------------------------------------------
+# Task 2 — tctl.tmux importability
+# ---------------------------------------------------------------------------
+
+
+def test_tctl_tmux_importable() -> None:
+    from tctl.tmux import TmuxSession, _validate_tmux_name, tmux_session_exists
+
+    assert callable(TmuxSession)
+    assert callable(_validate_tmux_name)
+    assert callable(tmux_session_exists)
+
+
 # Integration: env propagation into real session
 @pytest.mark.integration
 def test_env_propagation_into_session(tmp_path: Path) -> None:
