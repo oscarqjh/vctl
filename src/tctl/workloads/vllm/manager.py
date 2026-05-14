@@ -22,10 +22,42 @@ from tctl.workloads.haproxy.routing import pool_for_model
 from tctl.workloads.haproxy.scaling import _do_add, _do_drain, _do_remove
 from tctl.workloads.haproxy.state import BackendState
 
-# _wait_for_ready / _wait_for_idle live in vctl.commands.serve until Task 7
-# moves vllm commands into tctl.workloads.vllm.commands. Import at module
-# level so tests can monkeypatch tctl.workloads.vllm.manager._wait_for_ready.
-from vctl.commands.serve import _wait_for_idle, _wait_for_ready  # noqa: E402
+# _wait_for_ready / _wait_for_idle are defined here (duplicated from commands.py to avoid
+# circular imports: commands.py lazily imports VllmManager; manager.py must not import commands).
+# Tests monkeypatch tctl.workloads.vllm.manager._wait_for_ready directly.
+
+
+def _wait_for_ready(port: int, timeout: float) -> None:
+    """Poll vllm /v1/models until it returns data, or raise TimeoutError."""
+    deadline = time.monotonic() + timeout
+    last_err: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.get(f"http://localhost:{port}/v1/models", timeout=2.0)
+            if r.json().get("data"):
+                return
+        except Exception as e:
+            last_err = e
+        time.sleep(0.5)
+    raise TimeoutError(f"vllm did not become ready on :{port}: {last_err}")
+
+
+def _wait_for_idle(port: int, timeout: float) -> None:
+    """Poll vllm /metrics until running-request count reaches 0."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            text = httpx.get(f"http://localhost:{port}/metrics", timeout=2.0).text
+            running = 0.0
+            for line in text.splitlines():
+                if line.startswith("vllm:num_requests_running "):
+                    running = float(line.split()[1])
+            if running <= 0.0:
+                return
+        except Exception:
+            return
+        time.sleep(1)
+
 
 _LOG = logging.getLogger(__name__)
 
@@ -191,7 +223,7 @@ class VllmManager:
         self._write_atomic(self.host_path, socket.gethostname())
 
         # Wait for vllm HTTP readiness.
-        from vctl.commands.serve import _resolve_ready_timeout  # noqa: PLC0415
+        from tctl.workloads.vllm.commands import _resolve_ready_timeout  # noqa: PLC0415
 
         timeout = _resolve_ready_timeout(rc)
         try:
