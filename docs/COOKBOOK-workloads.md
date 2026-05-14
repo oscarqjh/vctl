@@ -103,7 +103,7 @@ def _cmd_serve(ns: argparse.Namespace, argv_rest: list[str]) -> int:
     from tctl.resolver import resolve
     from tctl.workloads.lmdeploy.manager import LmdeployManager
 
-    resolved = resolve(ns)
+    resolved = resolve(ns.config, profile=ns.profile)
     mgr = LmdeployManager(resolved.profile, resolved)
     mgr.start(argv=[...])
     return 0
