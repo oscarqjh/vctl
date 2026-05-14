@@ -1,45 +1,43 @@
-# vctl
+# tctl
 
-**vctl** is a typed Python CLI for orchestrating a multi-pod vLLM fleet behind an HAProxy load balancer. Pydantic v2 schema, atomic state management, structured logging, and a clean subcommand tree — spin up, scale, and tear down vLLM inference backends with a single command.
+**tctl** is a typed Python CLI for managing tmux-supervised long-running processes; ships workloads for vllm, haproxy, and lmms. Pydantic v2 schema, atomic state management, structured logging, and a `tctl <workload> <verb>` command tree — spin up, scale, and tear down inference backends with a single command.
 
 ---
 
 ## Install
 
 ```bash
-uv tool install git+https://github.com/oscarqjh/vctl.git
+uv tool install git+https://github.com/oscarqjh/tctl.git
 ```
 
 Pin to a release tag (recommended):
 ```bash
-uv tool install git+https://github.com/oscarqjh/vctl.git@v0.4.0
+uv tool install git+https://github.com/oscarqjh/tctl.git@v0.9.0
 ```
 
 Verify the install:
 
 ```bash
-vctl --help          # < 200 ms startup
-vctl --version
+tctl --help          # < 200 ms startup
+tctl --version
 ```
 
 ---
 
-## Where vctl looks for `cluster.yaml`
+## Where tctl looks for `cluster.yaml`
 
 In order:
 1. `--config <path>` CLI flag
 2. `CLUSTER_CONFIG` env var
-3. `~/.vctl/cluster.yaml` (canonical default)
+3. `~/.tctl/cluster.yaml` (canonical default)
 
-If none of these point to a readable file, vctl exits 2 with a clear message and tells you to run `vctl init-config`.
+If none of these point to a readable file, tctl exits 2 with a clear message and tells you to run `tctl init-config`.
 
-Bootstrap a config in the default location so `vctl` works from any directory:
+Bootstrap a config in the default location so `tctl` works from any directory:
 
 ```bash
-vctl init-config         # writes to ~/.vctl/ by default
+tctl init-config         # writes to ~/.tctl/ by default
 ```
-
-Now `vctl info`, `vctl serve`, etc. work from any directory.
 
 ---
 
@@ -47,41 +45,54 @@ Now `vctl info`, `vctl serve`, etc. work from any directory.
 
 ### 0. Bootstrap your config (recommended)
 
-The fastest way to start is with `vctl init-config`, which scaffolds a fully-documented `cluster.yaml` and a default set of model profiles into `~/.vctl/`:
+The fastest way to start is with `tctl init-config`, which scaffolds a fully-documented `cluster.yaml` and a default set of model profiles into `~/.tctl/`:
 
 ```bash
-vctl init-config
+tctl init-config
 # Created:
-#   ~/.vctl/cluster.yaml
-#   ~/.vctl/models/qwen3_5-9b.yaml
-#   ~/.vctl/models/qwen3-vl-30b-a3b.yaml
+#   ~/.tctl/cluster.yaml
+#   ~/.tctl/models/qwen3_5-9b.yaml
+#   ~/.tctl/models/qwen3-vl-30b-a3b.yaml
 ```
 
-Runtime artifacts (haproxy.cfg, haproxy.pid, haproxy.sock) live alongside under `~/.vctl/lb/` — single home for everything vctl-related.
+Runtime artifacts (haproxy.cfg, haproxy.pid, haproxy.sock) live alongside under `~/.tctl/haproxy/` — single home for everything tctl-related.
 
-Every field is documented inline. Edit `cluster.yaml` to set `lb.host`, `cluster.venv`, and `cluster.state_dir` for your environment, then pick a profile as your default.
+Every field is documented inline. Edit `cluster.yaml` to set `haproxy.host`, `cluster.venv`, and `cluster.state_dir` for your environment.
 
 Options:
 
 | Flag | Description |
 |---|---|
-| `--dir <path>` | Write files into `<path>` instead of `~/.vctl/`. |
+| `--dir <path>` | Write files into `<path>` instead of `~/.tctl/`. |
 | `--force` | Overwrite existing files without prompting. |
 | `--profiles a,b,c` | Scaffold only the named profiles (default: all built-in). |
 
 Example — scaffold only one profile into a new directory:
 
 ```bash
-vctl init-config --dir /opt/myconfig --profiles qwen3_5-9b
+tctl init-config --dir /opt/myconfig --profiles qwen3_5-9b
 ```
 
 Available built-in profiles: `qwen3_5-9b`, `qwen3-vl-30b-a3b`.
 
 ### 1. Write a cluster config (manual alternative)
 
-```bash
-cp examples/cluster.yaml cluster.yaml
-# edit: set lb.host to your HAProxy pod IP, adjust venv/state_dir
+```yaml
+# ~/.tctl/cluster.yaml
+apiVersion: tctl/v1
+cluster:
+  host: 10.1.2.100
+  venv: /opt/venvs/vllm
+  state_dir: ~/.tctl/state
+haproxy:
+  kind: haproxy
+  host: 10.1.2.3
+  pools:
+    - name: qwen3-5-9b
+      served_model: "Qwen/Qwen3.5-9B"
+      bind_port: 8080
+vllm:
+  default_profile: qwen3_5-9b
 ```
 
 See [`examples/cluster.yaml`](examples/cluster.yaml) for an annotated template.
@@ -89,8 +100,8 @@ See [`examples/cluster.yaml`](examples/cluster.yaml) for an annotated template.
 ### 2. Write a model profile
 
 ```bash
-mkdir -p models
-cp examples/models/qwen3-vl-30b-a3b.yaml models/
+mkdir -p ~/.tctl/models
+cp examples/models/qwen3-vl-30b-a3b.yaml ~/.tctl/models/
 # edit: adjust GPU count / parallelism as needed
 ```
 
@@ -99,7 +110,7 @@ See [`examples/models/`](examples/models/) for ready-to-use templates.
 ### 3. Inspect the resolved config
 
 ```bash
-vctl info
+tctl vllm info
 ```
 
 Prints a resolved table of cluster + profile settings sourced from `cluster.yaml` and the active profile.
@@ -107,15 +118,15 @@ Prints a resolved table of cluster + profile settings sourced from `cluster.yaml
 ### 4. Launch vLLM and attach to the LB
 
 ```bash
-vctl serve                        # uses profile from cluster.yaml
-vctl serve models/qwen3_5-9b.yaml   # positional shortcut (see below)
+tctl vllm serve                        # uses default_profile from cluster.yaml
+tctl vllm serve models/qwen3_5-9b.yaml   # positional shortcut (see below)
 ```
 
-`vctl serve` will:
-1. Run `vctl preflight` (port / GPU checks).
+`tctl vllm serve` will:
+1. Run `tctl vllm preflight` (port / GPU checks).
 2. Launch the vLLM API server processes.
 3. Wait for all backends to be healthy (`/v1/models`).
-4. Attach each backend to the HAProxy pool (`lb auto-add`).
+4. Attach each backend to the HAProxy pool (`haproxy add`).
 
 ---
 
@@ -125,7 +136,7 @@ When you serve more than one model from the same HAProxy instance, configure
 one pool per model in `cluster.yaml`:
 
 ```yaml
-lb:
+haproxy:
   kind: haproxy
   host: 10.1.2.3
   pools:
@@ -137,7 +148,7 @@ lb:
       bind_port: 8081
 ```
 
-### Schema: `lb.pools: [...]`
+### Schema: `haproxy.pools: [...]`
 
 Each entry is a `Pool` object with three fields:
 
@@ -151,54 +162,34 @@ HAProxy emits one `frontend pool_<name>` + `backend pool_<name>` block per
 pool, so traffic to `lb:8080` reaches only Model A workers and traffic to
 `lb:8081` reaches only Model B workers.
 
-### One frontend port per model
+### `tctl vllm serve` auto-routes via `pool_for_model`
 
-Clients should use the pool-specific URL that matches the model they want:
-
-```bash
-# Model A clients
-curl http://lb:8080/v1/chat/completions ...
-
-# Model B clients
-curl http://lb:8081/v1/chat/completions ...
-```
-
-### `vctl init-config` emits multi-pool by default
-
-Running `vctl init-config` now generates a `cluster.yaml` with a `lb.pools`
-block (one pool per built-in profile). Edit it to match your model names and
-ports.
-
-### `vctl serve` auto-routes via `pool_for_model`
-
-`vctl serve` resolves the active profile's `served_model` to the matching pool
+`tctl vllm serve` resolves the active profile's `served_model` to the matching pool
 entry via `pool_for_model`. If no pool claims the model, it exits with code 3
 immediately — before spawning vLLM — so misconfiguration is caught early.
 
-### `vctl lb add --pool` flag for manual override
+### `tctl haproxy add --pool` flag for manual override
 
-By default `vctl lb add <ep>` probes `/v1/models` on the endpoint and
+By default `tctl haproxy add <ep>` probes `/v1/models` on the endpoint and
 auto-selects the correct pool. Pass `--pool <name>` to skip the probe and
 place the endpoint directly:
 
 ```bash
-vctl lb add 10.1.2.5:8000 --pool model-a
-vctl lb drain 10.1.2.5:8000 --pool model-a
-vctl lb wait-ready 2 --pool model-a
+tctl haproxy add 10.1.2.5:8000 --pool model-a
+tctl haproxy drain 10.1.2.5:8000 --pool model-a
 ```
 
-### Dashboard (`vctl lb info`)
+### Dashboard (`tctl haproxy status`)
 
-`vctl lb info` shows everything in one screen — use it instead of the separate
-`lb status` / `lb list` commands (removed in v0.2.4):
+`tctl haproxy status` shows everything in one screen:
 
 ```
-╭─ LB Process ────────────────────────────────────────────────╮
-│ pid 708023  alive=true  admin=0.0.0.0:9001 (reachable)      │
-│ tmux: vctl-lb         is_local_host=true                    │
-│ cfg: /home/x/.vctl/lb/haproxy.cfg                           │
-│ stats UI: http://10.119.30.181:9000                         │
-╰─────────────────────────────────────────────────────────────╯
+╭─ HAProxy Process ──────────────────────────────────────────────╮
+│ pid 708023  alive=true  admin=0.0.0.0:9001 (reachable)        │
+│ tmux: tctl-haproxy    is_local_host=true                      │
+│ cfg: /home/x/.tctl/haproxy/haproxy.cfg                        │
+│ stats UI: http://10.119.30.181:9000                           │
+╰────────────────────────────────────────────────────────────────╯
 
 pool: qwen3-5-9b → http://10.119.30.181:8080   (Qwen/Qwen3.5-9B)
   Endpoint              Status   scur  qcur  running  waiting  last-check
@@ -206,30 +197,7 @@ pool: qwen3-5-9b → http://10.119.30.181:8080   (Qwen/Qwen3.5-9B)
   10.119.27.91:8000     ✓ live      2     0        2        1  2s
   10.119.30.181:8000    ✓ live      0     0        0        0  1s
   totals: scur=2  qcur=0  running=2  waiting=1
-
-pool: qwen3-vl-30b → http://10.119.30.181:8081   (Qwen/Qwen3-VL-30B-A3B)
-  (no backends)
 ```
-
-- **scur / qcur**: current sessions / queued sessions from HAProxy `show stat`.
-- **running / waiting**: GPU queue depth from each backend's vLLM Prometheus `/metrics`.
-  Shows `--` if the endpoint is unreachable (never blocks the dashboard).
-- **Status**: `✓ live` (in state file + HAProxy), `⚠ tracked-only` (state file only —
-  run `lb auto-add`), `⚠ untracked` (HAProxy only — run `lb add <ep>`).
-- Always exits 0. Use `vctl lb health` for scripting (exits 1 on any unhealthy backend).
-
----
-
-## Concepts
-
-| Term | Description |
-|---|---|
-| **profile** | A `vctl/v1 Profile` YAML describing a single model deployment (GPU layout, parallelism, vllm args). |
-| **LB host** | The IP of the pod/machine where HAProxy runs. `vctl lb is-host` checks whether the current machine is the LB host. |
-| **backend** | A single vLLM API server process (one per data-parallel shard). Tracked in the state file. |
-| **state file** | An `fcntl.flock`-protected JSON file at `cluster.state_dir/<profile>.json` recording the PIDs and ports of live backends. A `.lock` sidecar is used for stable lock semantics across process restarts (AT-11). |
-
-Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Settings can also be overridden via environment variables (see below).
 
 ---
 
@@ -238,71 +206,78 @@ Config is loaded from `cluster.yaml` (or `--config`) and a profile YAML. Setting
 For the complete reference (all flags, exit codes, examples) see
 [`docs/CLI-REFERENCE.md`](docs/CLI-REFERENCE.md).
 
-### Top-level
+For adding a new workload see [`docs/COOKBOOK-workloads.md`](docs/COOKBOOK-workloads.md).
+
+### `tctl vllm` — vLLM workload
 
 | Command | Description |
 |---|---|
-| `vctl info` | Print resolved cluster + profile config as a table. |
-| `vctl args` | Print the vLLM CLI args that would be used for the active profile. |
-| `vctl profiles [list\|set <name>]` | List available profile YAMLs; `set` switches the active profile. |
-| `vctl preflight [--json]` | Validate environment: GPU count, /dev/shm, port availability, venv. |
-| `vctl serve [--foreground] [--skip-preflight]` | Spawn vLLM in a detached tmux session and attach to LB pool. |
-| `vctl rolling-restart --pool <name>` | Sequential rolling restart of a pool's endpoints; idempotent, auto-resumes interrupted runs. |
-| `vctl stop [--json]` | Drain this host's endpoints from all LB pools and kill the vllm tree. |
-| `vctl init-config [--dir] [--force] [--profiles]` | Scaffold `cluster.yaml` + model profiles into `~/.vctl/`. |
-| `vctl config <validate\|show\|schema>` | Validate/show/dump JSON Schema for config files. |
+| `tctl vllm info` | Print resolved cluster + profile config as a table. |
+| `tctl vllm args` | Print the vLLM CLI args for the active profile. |
+| `tctl vllm profiles [list\|set <name>]` | List available profile YAMLs; `set` switches the active profile. |
+| `tctl vllm preflight [--json]` | Validate environment: GPU count, /dev/shm, port availability, venv. |
+| `tctl vllm serve [--foreground] [--skip-preflight]` | Spawn vLLM in a detached tmux session and attach to LB pool. |
+| `tctl vllm stop [--json]` | Drain from all LB pools, kill tmux session, sweep local vLLM process tree. |
+| `tctl vllm rolling-restart --pool <name>` | Sequential rolling restart of a pool's endpoints; idempotent, auto-resumes. |
 
-### `vctl serve` sub-commands
+`tctl vllm serve` sub-commands:
 
 | Command | Description |
 |---|---|
-| `vctl serve status` | Show tmux/pid/lb-attached state and log size for the active profile. |
-| `vctl serve stop` | Drain LB → wait idle → remove → SIGTERM tmux → kill if grace exceeded. |
-| `vctl serve restart` | Stop + start in-place (preserves profile). |
-| `vctl serve console` | Attach terminal to live vllm tmux session. `Ctrl-B D` detaches. |
-| `vctl serve logs [-n N] [-f] [--prune]` | Tail / follow / prune the vllm log. |
+| `tctl vllm serve status` | Show tmux/pid/lb-attached state and log size for the active profile. |
+| `tctl vllm serve restart` | Stop + start in-place (preserves profile). |
+| `tctl vllm serve console` | Attach terminal to live vllm tmux session. `Ctrl-B D` detaches. |
+| `tctl vllm serve logs [-n N] [-f] [--prune]` | Tail / follow / prune the vllm log. |
 
-### `vctl lb` — load-balancer management
-
-| Command | Description |
-|---|---|
-| `lb install` | Install HAProxy (conda → source-build fallback; SHA256-pinned). |
-| `lb start [--force]` | Start HAProxy on the LB host (guards against self-IP conflict, exit 4). |
-| `lb stop` | Stop the HAProxy process and watcher session. |
-| `lb status` | **Unified dashboard**: process panel + per-pool table with scur/qcur/running/waiting. Always exits 0. |
-| `lb reload` | Reload HAProxy config without dropping connections. |
-| `lb logs` | Print HAProxy log file. |
-| `lb config` | Print the rendered HAProxy config. |
-| `lb health` | Probe each registered backend; exit non-zero on any unhealthy (scripting gate). |
-| `lb is-host` | Exit 0 if this machine is the configured LB host, else exit 1. |
-| `lb where [--pool <name>]` | Print the LB host:port (all pools or one). |
-| `lb wait-ready [N] [--pool <name>]` | Block until ≥N ready backends pass health checks AND the LB front returns HTTP 200. |
-| `lb add <ep> [--pool <name>]` | Add a backend to HAProxy (idempotent). Auto-routes by `/v1/models` probe. |
-| `lb remove <ep>` | Remove a backend from HAProxy. |
-| `lb drain <ep> [--pool <name>]` | Set a backend to DRAIN state (stops new requests, finishes in-flight). |
-| `lb attach [port]` | Probe `localhost:<port>/v1/models` then add self to the matching pool. |
-| `lb detach [--force]` | Drain self, wait for in-flight, remove. `--force` drops active sessions. |
-| `lb auto-add` | Discover live backends from the state file and attach all. |
-| `lb prune [--pool P] [--threshold D] [--dry-run]` | Remove DOWN backends past the dead threshold. |
-
-### `vctl config` — schema and inspection
+### `tctl haproxy` — HAProxy workload
 
 | Command | Description |
 |---|---|
-| `config validate <path>` | Validate `cluster.yaml` or a profile YAML against the Pydantic schema. |
-| `config show` | Print the fully-merged resolved config as YAML. |
-| `config schema` | Print the JSON Schema for `ClusterFile` and `ProfileFile`. |
+| `tctl haproxy start [--force]` | Start HAProxy in tmux session `tctl-haproxy` (guards against self-IP, exit 4). |
+| `tctl haproxy stop` | Stop HAProxy and tear down the tmux session. |
+| `tctl haproxy status` | Unified dashboard: process panel + per-pool table. Always exits 0. |
+| `tctl haproxy reload` | Re-render config and reload HAProxy without dropping connections. |
+| `tctl haproxy logs` | Print HAProxy log file. |
+| `tctl haproxy config` | Print the rendered HAProxy config. |
+| `tctl haproxy health` | Probe each registered backend; exit non-zero on any unhealthy. |
+| `tctl haproxy add <ep> [--pool <name>]` | Register endpoint in a pool (idempotent, auto-routes). |
+| `tctl haproxy remove <ep>` | Remove an endpoint from its pool. |
+| `tctl haproxy drain <ep> [--pool <name>]` | Set backend to DRAIN state. |
+| `tctl haproxy scaling attach/detach/auto-add` | Self-registration scaling sub-commands. |
+| `tctl haproxy prune [--pool P] [--threshold D] [--dry-run]` | Remove DOWN backends past threshold. |
+
+### `tctl lmms` — lmms-eval workload (hidden)
+
+| Command | Description |
+|---|---|
+| `tctl lmms run-loop` | Start the lmms-eval run loop in a detached tmux session. |
+| `tctl lmms stop` | Kill the `tctl-lmms` tmux session. |
+| `tctl lmms status` | Show whether `tctl-lmms` is running. |
+
+### `tctl config` — schema and inspection
+
+| Command | Description |
+|---|---|
+| `tctl config validate <path>` | Validate `cluster.yaml` or a profile YAML. Exit 2 on error. |
+| `tctl config show` | Print the fully-merged resolved config as YAML. |
+| `tctl config schema` | Dump the JSON Schema for `ClusterFile` and `ProfileFile`. |
+
+### `tctl init-config` — bootstrap
+
+| Command | Description |
+|---|---|
+| `tctl init-config [--dir] [--force] [--profiles]` | Scaffold `cluster.yaml` + model profiles into `~/.tctl/`. |
 
 ---
 
 ## Positional profile shortcut
 
-When a path (or bare name) is given as the first positional argument to `serve` or `stop`, vctl treats it as `--profile`:
+When a path (or bare name) is given as the first positional argument to `tctl vllm serve` or `tctl vllm stop`, tctl treats it as `--profile`:
 
 ```bash
-vctl serve models/qwen3_5-9b.yaml
+tctl vllm serve models/qwen3_5-9b.yaml
 # equivalent to:
-vctl serve --profile qwen3_5-9b
+tctl vllm serve --profile qwen3_5-9b
 ```
 
 The `.yaml` extension and any leading directory components are stripped to derive the profile name.
@@ -311,20 +286,19 @@ The `.yaml` extension and any leading directory components are stripped to deriv
 
 ## Environment variable overrides
 
-All `lb.*` cluster fields can be overridden at runtime using `VCTL_LB__<FIELD>` (double underscore = nesting):
+All `haproxy.*` cluster fields can be overridden at runtime using `TCTL_HAPROXY__<FIELD>` (double underscore = nesting):
 
 ```bash
-VCTL_LB__HOST=10.1.2.3 vctl lb start
+TCTL_HAPROXY__HOST=10.1.2.3 tctl haproxy start
 ```
 
 | Variable | Effect |
 |---|---|
-| `VCTL_LB__HOST` | Override `lb.host` (LB pod IP). |
-| `MODEL_PROFILE` | Alias for `--profile` (legacy compatibility). |
-| `LB_WAIT_TIMEOUT` | Seconds to wait in `lb wait-ready` (default: 300). |
-| `LB_DETACH_WAIT` | Seconds to wait for drain in `lb detach` (default: 60). |
-| `HAPROXY_VERSION` | HAProxy version to install via `lb install` (default: `2.9.x`). |
-| `VCTL_KILL_GRACE` | Seconds between SIGTERM and SIGKILL in `serve` shutdown (default: 10). |
+| `TCTL_HAPROXY__HOST` | Override `haproxy.host` (LB pod IP). |
+| `TCTL_PROFILE` | Active profile name (equivalent to `--profile`). |
+| `LB_WAIT_TIMEOUT` | Seconds to wait in scaling `wait-ready` (default: 300). |
+| `LB_DETACH_WAIT` | Seconds to wait for drain in detach (default: 60). |
+| `TCTL_KILL_GRACE` | Seconds between SIGTERM and SIGKILL in vllm shutdown (default: 10). |
 
 ---
 
@@ -333,18 +307,18 @@ VCTL_LB__HOST=10.1.2.3 vctl lb start
 ### LB host mismatch
 
 ```
-Error: self-IP guard: current machine IP matches lb.host — cannot start LB on the compute node
+Error: self-IP guard: current machine IP matches haproxy.host — cannot start HAProxy on the compute node
 ```
 
-`lb start` exits with code 4 if the LB host IP matches one of the current machine's IPs. This prevents accidentally starting HAProxy on a GPU worker. Set `lb.host` in `cluster.yaml` to the correct LB pod IP or use `VCTL_LB__HOST`.
+`tctl haproxy start` exits with code 4 if the haproxy host IP matches one of the current machine's IPs. Set `haproxy.host` in `cluster.yaml` to the correct LB pod IP or use `TCTL_HAPROXY__HOST`.
 
 ### Drain stuck
 
 ```
-lb detach  # hangs waiting for connections to drain
+tctl haproxy scaling detach  # hangs waiting for connections to drain
 ```
 
-Override the drain timeout: `LB_DETACH_WAIT=10 vctl lb detach --backend <addr>`. Or force-remove: `vctl lb remove --backend <addr> --force`.
+Override the drain timeout: `LB_DETACH_WAIT=10 tctl haproxy scaling detach`.
 
 ### Port collision
 
@@ -352,7 +326,7 @@ Override the drain timeout: `LB_DETACH_WAIT=10 vctl lb detach --backend <addr>`.
 preflight: port 8000 is already in use on this host
 ```
 
-Another process holds the port. Either stop it or change `server.http_port` in the profile YAML. `vctl preflight` reports all conflicting ports before `serve` launches anything.
+Another process holds the port. Either stop it or change `server.http_port` in the profile YAML. `tctl vllm preflight` reports all conflicting ports before `serve` launches anything.
 
 ---
 
@@ -360,8 +334,8 @@ Another process holds the port. Either stop it or change `server.http_port` in t
 
 ### HAProxy admin socket
 
-By default the HAProxy admin TCP socket (used by `vctl lb add/remove/drain` from worker nodes)
-is bound on `0.0.0.0:<lb.admin.bind_port>` with `level admin`. Any host that can reach this
+By default the HAProxy admin TCP socket (used by `tctl haproxy add/remove/drain` from worker nodes)
+is bound on `0.0.0.0:<haproxy.admin.bind_port>` with `level admin`. Any host that can reach this
 port can take full control of the load balancer.
 
 **Risk:** In a network without a firewall this is a LAN takeover vector.
@@ -370,41 +344,28 @@ port can take full control of the load balancer.
 
 Option A — firewall the admin port (keep cross-host scaling working):
 ```bash
-# Allow only your vctl worker subnet; block everything else
+# Allow only your tctl worker subnet; block everything else
 iptables -I INPUT -p tcp --dport 9001 ! -s 10.0.0.0/24 -j DROP
 ```
 
-Option B — restrict to loopback (all `vctl lb` scaling commands must run on the LB host,
-e.g. via SSH or inside a tmux session on the LB node):
+Option B — restrict to loopback (all `tctl haproxy` scaling commands must run on the haproxy host):
 ```yaml
 # cluster.yaml
-lb:
+haproxy:
   admin:
     bind_port: 9001
     bind_addr: 127.0.0.1   # <-- add this line
 ```
 
-When `bind_addr` is `0.0.0.0` (the default), `vctl lb start` will emit a WARNING reminding
+When `bind_addr` is `0.0.0.0` (the default), `tctl haproxy start` will emit a WARNING reminding
 you to firewall the port or switch to `127.0.0.1`.
-
-### Source-build SHA pinning
-
-When `vctl lb install` falls back to building HAProxy from source, the tarball is downloaded
-via HTTPS, its SHA256 is verified against a pinned value before anything is written to disk,
-and the build is refused if the hash does not match or is unknown.
-
-To build a version not in the pinned set (not recommended):
-```bash
-VCTL_INSTALLER_INSECURE=1 vctl lb install
-```
 
 ---
 
 ## Documentation
 
 - [`docs/CLI-REFERENCE.md`](docs/CLI-REFERENCE.md) — complete command reference: every flag, exit code, and sub-command.
-- [`docs/RESTART.md`](docs/RESTART.md) — safe procedures for restarting a vllm backend (both `vctl serve` mode and bare `vllm serve` mode).
+- [`docs/COOKBOOK-workloads.md`](docs/COOKBOOK-workloads.md) — guide for adding a new workload.
 - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — release history.
 - [`docs/BACKLOG.md`](docs/BACKLOG.md) — open work + ideas.
 - [`docs/RELEASE.md`](docs/RELEASE.md) — release process notes.
-

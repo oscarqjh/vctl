@@ -3,6 +3,28 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.9.0] - 2026-05-09
+
+### Breaking — project rename + workload reorg (no backwards compat)
+
+- **Project renamed:** `vctl` → `tctl`. PyPI package, CLI entry point, package root all change. Existing v0.8.x deployments must drain, reinit, and restart — no migration tool.
+- **Command structure:** flat top-level commands replaced with workload sub-trees. `vctl serve` → `tctl vllm serve`. `vctl lb start` → `tctl haproxy start`. `vctl lmmseval run-loop` → `tctl lmms run-loop`. Platform commands stay flat: `tctl config`, `tctl init-config`.
+- **`cluster.yaml` schema:** `apiVersion: vctl/v1` → `tctl/v1`. `lb:` key → `haproxy:`. Top-level `profile:` field moved to `vllm.default_profile`. Old shape is REJECTED by `tctl config validate` (exit 2) — re-init required.
+- **Env vars:** `VCTL_*` prefix → `TCTL_*`. `MODEL_PROFILE` env var dropped (was the legacy alias for `VCTL_PROFILE`).
+- **State paths:** `~/.vctl/` → `~/.tctl/`. Haproxy state moves to `~/.tctl/haproxy/`. Rolling-restart session files move to `~/.tctl/vllm/rolling-restart/<pool>.json` (vllm-owned).
+- **Tmux session names:** `vctl-lb` → `tctl-haproxy`, `vctl-lb-watch` → `tctl-haproxy-watch`, `vctl-vllm-<profile>` → `tctl-vllm-<profile>`, `vctl-lmmseval` → `tctl-lmms`.
+- **`tctl vllm stop` merge:** `vctl stop` and `vctl serve stop` consolidated into a single `tctl vllm stop` doing drain + tmux-kill + local-vllm-tree-kill in one call. The `serve` sub-verb retains only `status / restart / console / logs`.
+
+### Added
+
+- **Workload extensibility:** new workloads (e.g. `tctl lmdeploy`) can be added in 3 steps per `docs/COOKBOOK-workloads.md`. No base class, no plugin system — convention-driven.
+- **`docs/COOKBOOK-workloads.md`** — guide for adding a new workload.
+
+### Exit codes (UNCHANGED)
+2 (config error), 3 (pool routing failure), 4 (LB self-IP / concurrency), 130 (Ctrl-C).
+
+---
+
 ## [0.8.0] - 2026-05-09
 
 ### Breaking Changes

@@ -1,10 +1,22 @@
-# vctl CLI Reference
+# tctl CLI Reference
 
-Concise reference for every `vctl` command and sub-command.
-Run `vctl <cmd> --help` for the canonical help text (always up-to-date).
+Concise reference for every `tctl` command and sub-command.
+Run `tctl <workload> <verb> --help` for the canonical help text (always up-to-date).
 
-**vctl** is a typed Python CLI for orchestrating a multi-pod vLLM fleet behind HAProxy.
-Distributed via `uv tool install`. Current version: **0.7.0**.
+**tctl** is a typed Python CLI for managing tmux-supervised long-running processes; ships workloads for vllm, haproxy, and lmms.
+Distributed via `uv tool install`. Current version: **0.9.0**.
+
+---
+
+## Synopsis
+
+```
+tctl [--config PATH] [--profile NAME] [--log-level LEVEL] <workload> <verb> [args]
+tctl <platform-cmd> [args]
+```
+
+Workloads: `vllm`, `haproxy`, `lmms` (hidden).
+Platform commands: `config`, `init-config`.
 
 ---
 
@@ -21,35 +33,53 @@ Distributed via `uv tool install`. Current version: **0.7.0**.
 
 ---
 
-## Commands
+## `tctl vllm` — vLLM workload
 
-### `vctl info`
+**Synopsis:** `tctl vllm <verb> [flags]`
 
-**Synopsis:** `vctl info`
+All verbs require a reachable `cluster.yaml`.
+
+### `tctl vllm info`
+
+**Synopsis:** `tctl vllm info`
 
 Print the resolved cluster + profile config as a table: model, parallelism, vllm port,
 LB host, per-pool URLs, venv, state_dir.
 
 ---
 
-### `vctl args`
+### `tctl vllm args`
 
-**Synopsis:** `vctl args`
+**Synopsis:** `tctl vllm args`
 
 Print the vLLM CLI args that would be passed for the active profile, one per line.
 Useful for debugging or piping into a manual `vllm serve` invocation.
 
 ---
 
-### `vctl preflight`
+### `tctl vllm profiles`
 
-**Synopsis:** `vctl preflight [--json]`
+**Synopsis:** `tctl vllm profiles [list | set <name>]`
+
+List available model profiles from `models/*.yaml`.
+`*` marks the active profile from `cluster.yaml` (`vllm.default_profile`).
+
+| Sub-command    | Description |
+|----------------|-------------|
+| `list`         | List available profiles (default when no sub-command given) |
+| `set <name>`   | Switch the active profile by rewriting `vllm.default_profile` in `cluster.yaml` |
+
+---
+
+### `tctl vllm preflight`
+
+**Synopsis:** `tctl vllm preflight [--json]`
 
 Run sanity checks before launching a vllm inference server:
 - `gpus` — nvidia-smi present (or num_gpus=0)
 - `shm` — /dev/shm ≥ 8 GB
 - `venv` — `cluster.venv` path exists
-- `lb_route` — TCP connection to `lb.host:pool.bind_port` succeeds
+- `lb_route` — TCP connection to `haproxy.host:pool.bind_port` succeeds
 - `vllm_port` — `server.http_port` is free on localhost
 
 Exits 0 when all checks pass, exit 4 on any failure.
@@ -60,56 +90,49 @@ Exits 0 when all checks pass, exit 4 on any failure.
 
 ---
 
-### `vctl serve`
+### `tctl vllm serve`
 
-**Synopsis:** `vctl serve [--foreground] [--skip-preflight]`
+**Synopsis:** `tctl vllm serve [--foreground] [--skip-preflight]`
 
-Default (no flags): spawn vllm in a detached tmux session `vctl-vllm-<profile>`,
+Default (no flags): spawn vllm in a detached tmux session `tctl-vllm-<profile>`,
 wait for readiness, attach to the LB pool, then return immediately.
 The vllm process survives SSH disconnect.
 
 | Flag               | Description |
 |--------------------|-------------|
-| `--foreground`     | Block until vllm exits (v0.4.x behavior). SSH disconnect kills vllm. Signals trigger drain → remove → kill. |
+| `--foreground`     | Block until vllm exits. SSH disconnect kills vllm. Signals trigger drain → remove → kill. |
 | `--skip-preflight` | Skip preflight checks before spawning. |
 
 **Env vars:**
 
 | Variable                      | Effect |
 |-------------------------------|--------|
-| `VCTL_READY_TIMEOUT`          | Readiness poll timeout in seconds (default: 1800) |
-| `VLLM_ENGINE_READY_TIMEOUT_S` | Per-profile readiness override; wins over `VCTL_READY_TIMEOUT` |
+| `TCTL_READY_TIMEOUT`          | Readiness poll timeout in seconds (default: 1800) |
+| `VLLM_ENGINE_READY_TIMEOUT_S` | Per-profile readiness override; wins over `TCTL_READY_TIMEOUT` |
 | `LB_DETACH_WAIT`              | Seconds to wait for in-flight requests during drain (default: 600) |
-| `VCTL_KILL_GRACE`             | SIGTERM → SIGKILL grace period in seconds (default: 30) |
-| `VCTL_NO_PPID_WATCHDOG`       | Set to `1` to disable the PPID orphan watchdog (useful in containers) |
+| `TCTL_KILL_GRACE`             | SIGTERM → SIGKILL grace period in seconds (default: 30) |
+| `TCTL_NO_PPID_WATCHDOG`       | Set to `1` to disable the PPID orphan watchdog (useful in containers) |
 
-#### Sub-commands
+#### `tctl vllm serve` sub-commands
 
-Run `vctl serve <verb> --help` for per-verb help text.
+Run `tctl vllm serve <verb> --help` for per-verb help text.
 
-##### `vctl serve status`
+##### `tctl vllm serve status`
 
 Show tmux session name, pid liveness, vllm readiness, LB-attached state, and log size
 for the active profile.
 
-##### `vctl serve stop`
-
-Gracefully shut down the running vllm:
-drain LB endpoint → wait for in-flight requests → remove from LB →
-SIGTERM tmux session → SIGKILL if grace exceeded.
-
-##### `vctl serve restart`
+##### `tctl vllm serve restart`
 
 Stop the running vllm and start a fresh instance under the same profile.
 Logs a warning if the stored `cmd.json` snapshot drifted from the current resolved config.
 
-##### `vctl serve console`
+##### `tctl vllm serve console`
 
 Attach the operator's terminal to the live vllm tmux session.
 `Ctrl-B D` detaches without killing vllm.
-Use to inspect live model output, debug warmup, or send Ctrl-C inside the session.
 
-##### `vctl serve logs`
+##### `tctl vllm serve logs`
 
 Print the last N lines of the vllm log, follow new lines, or prune the log file in-place
 (preserves tmux pipe-pane fd).
@@ -124,12 +147,13 @@ Print the last N lines of the vllm log, follow new lines, or prune the log file 
 
 ---
 
-### `vctl stop`
+### `tctl vllm stop`
 
-**Synopsis:** `vctl stop [--json]`
+**Synopsis:** `tctl vllm stop [--json]`
 
 Drain and remove this host's vllm endpoint(s) from all LB pools, then kill the local
-vllm subprocess tree. Operates on all pools; safe to run even when partially attached.
+vllm subprocess tree. Consolidates the old separate `serve stop` and top-level `stop`
+commands into one call: drain → tmux-kill → local-vllm-tree-kill.
 
 | Flag     | Description |
 |----------|-------------|
@@ -137,27 +161,13 @@ vllm subprocess tree. Operates on all pools; safe to run even when partially att
 
 ---
 
-### `vctl profiles`
-
-**Synopsis:** `vctl profiles [list | set <name>]`
-
-List available model profiles from `models/*.yaml`.
-`*` marks the active profile from `cluster.yaml`.
-
-| Sub-command    | Description |
-|----------------|-------------|
-| `list`         | List available profiles (default when no sub-command given) |
-| `set <name>`   | Switch the active profile by rewriting `profile:` in `cluster.yaml` |
-
----
-
-### `vctl rolling-restart`
+### `tctl vllm rolling-restart`
 
 ```
-vctl rolling-restart --pool <name> [FLAGS]
+tctl vllm rolling-restart --pool <name> [FLAGS]
 ```
 
-Sequential, halt-on-failure rolling restart of every endpoint in a named pool. For each endpoint: ssh to the worker host, run `vctl serve restart`, poll HAProxy until the endpoint returns `UP`, then move to the next. State is persisted to `~/.vctl/lb/rolling-restart/<pool>.json` so a failed or interrupted run can be resumed by re-running the same command.
+Sequential, halt-on-failure rolling restart of every endpoint in a named pool. For each endpoint: ssh to the worker host, run `tctl vllm serve restart`, poll HAProxy until the endpoint returns `UP`, then move to the next. State is persisted to `~/.tctl/vllm/rolling-restart/<pool>.json` so a failed or interrupted run can be resumed by re-running the same command.
 
 **Required flag:**
 
@@ -179,9 +189,9 @@ Sequential, halt-on-failure rolling restart of every endpoint in a named pool. F
 | Flag | Default | Description |
 |---|---|---|
 | `--ready-timeout SECONDS` | 60 | Seconds to wait for HAProxy `UP` status after ssh returns 0. |
-| `--vllm-timeout SECONDS` | 600 | Seconds the remote `vctl serve restart` is allowed to take (ssh subprocess timeout). |
+| `--vllm-timeout SECONDS` | 600 | Seconds the remote `tctl vllm serve restart` is allowed to take (ssh subprocess timeout). |
 | `--ssh-user USER` | (ssh config) | Override ssh username for all worker connections. |
-| `--remote-vctl-path PATH` | (login shell) | Absolute path to `vctl` on the remote host. If omitted, uses `bash -lc 'vctl serve restart'` to ensure PATH is loaded. |
+| `--remote-tctl-path PATH` | (login shell) | Absolute path to `tctl` on the remote host. If omitted, uses `bash -lc 'tctl vllm serve restart'` to ensure PATH is loaded. |
 | `--quiet` | false | Suppress per-endpoint progress lines; print only the final summary. |
 
 **Exit codes:**
@@ -190,89 +200,101 @@ Sequential, halt-on-failure rolling restart of every endpoint in a named pool. F
 |---|---|
 | 0 | All endpoints restarted and verified UP. Session file deleted. |
 | 1 | Restart or health-check failure on an endpoint, or operator aborted resume. Session file preserved. |
-| 2 | Corrupt session file (invalid JSON). Run `vctl rolling-restart --pool NAME --abort` to clear it. |
+| 2 | Corrupt session file (invalid JSON). Run `tctl vllm rolling-restart --pool NAME --abort` to clear it. |
 | 3 | Unknown pool name. |
 | 4 | Rolling restart already in progress for this pool (`in_progress: true` in session file). Use `--abort` to clear it. |
 
-**Session file location:** `~/.vctl/lb/rolling-restart/<pool>.json`
-
-**Resume behaviour:** After a halt-on-failure (exit 1), re-running `vctl rolling-restart --pool <name>` automatically resumes: first verifies the failed endpoint's HAProxy status (5s probe); if `UP` it is moved to `completed`; if still DOWN the operator is prompted for (a) skip, (b) retry, or (c) abort.
+**Session file location:** `~/.tctl/vllm/rolling-restart/<pool>.json`
 
 ---
 
-### `vctl lb`
+## `tctl haproxy` — HAProxy workload
 
-**Synopsis:** `vctl lb <verb> [flags]`
+**Synopsis:** `tctl haproxy <verb> [flags]`
 
-LB lifecycle and scaling control. All verbs require a reachable `cluster.yaml`.
+HAProxy lifecycle and scaling control. All verbs require a reachable `cluster.yaml`.
 
-#### Process management
+### Process management
 
-| Verb      | Synopsis                        | Description |
-|-----------|---------------------------------|-------------|
-| `install` | `vctl lb install`               | Install HAProxy (conda → source-build fallback). SHA256-pinned. |
-| `start`   | `vctl lb start [--force]`       | Start HAProxy in tmux session `vctl-lb`. Guards against starting on a worker node (exit 4). `--force` bypasses the self-IP guard. |
-| `stop`    | `vctl lb stop`                  | SIGTERM HAProxy (via pidfile) and tear down the tmux session. |
-| `status`  | `vctl lb status`                | Unified dashboard: LB process panel + per-pool table with scur/qcur/running/waiting. Always exits 0. |
-| `reload`  | `vctl lb reload`                | Re-render `haproxy.cfg` and send `-sf <pid>` (graceful, zero-downtime reload). |
-| `logs`    | `vctl lb logs`                  | Print contents of `haproxy.log`. |
-| `config`  | `vctl lb config`                | Print the rendered `haproxy.cfg`. |
+| Verb      | Synopsis                              | Description |
+|-----------|---------------------------------------|-------------|
+| `start`   | `tctl haproxy start [--force]`        | Start HAProxy in tmux session `tctl-haproxy`. Guards against starting on a worker node (exit 4). `--force` bypasses the self-IP guard. |
+| `stop`    | `tctl haproxy stop`                   | SIGTERM HAProxy (via pidfile) and tear down the tmux session. |
+| `status`  | `tctl haproxy status`                 | Unified dashboard: process panel + per-pool table with scur/qcur/running/waiting. Always exits 0. |
+| `reload`  | `tctl haproxy reload`                 | Re-render `haproxy.cfg` and send `-sf <pid>` (graceful, zero-downtime reload). |
+| `logs`    | `tctl haproxy logs`                   | Print contents of `haproxy.log`. |
+| `config`  | `tctl haproxy config`                 | Print the rendered `haproxy.cfg`. |
 
-#### Discovery and health
+### Discovery and health
 
-| Verb         | Synopsis                             | Description |
-|--------------|--------------------------------------|-------------|
-| `is-host`    | `vctl lb is-host`                    | Exit 0 if this machine's IP matches `lb.host`, else exit 1. |
-| `where`      | `vctl lb where [--pool <name>]`      | Print `lb.host:bind_port`. With `--pool` prints only the matching pool's URL; exit 3 on unknown pool. |
-| `wait-ready` | `vctl lb wait-ready [N] [--pool P]`  | Block until ≥N backends pass health checks AND the LB front returns HTTP 200. `--pool` scopes to a single pool. Env: `LB_WAIT_TIMEOUT` (seconds, 0=forever). |
-| `health`     | `vctl lb health`                     | Probe each registered backend; exit non-zero on any unhealthy. Use as a scripting gate. |
+| Verb         | Synopsis                                  | Description |
+|--------------|-------------------------------------------|-------------|
+| `health`     | `tctl haproxy health`                     | Probe each registered backend; exit non-zero on any unhealthy. Use as a scripting gate. |
 
-#### Backend scaling
+### Backend scaling
 
-| Verb       | Synopsis                                    | Description |
-|------------|---------------------------------------------|-------------|
-| `add`      | `vctl lb add <ep> [--pool <name>]`          | Register `ip:port` in a pool (idempotent). Auto-routes by `/v1/models` probe; `--pool` skips the probe. |
-| `remove`   | `vctl lb remove <ep>`                       | Drop `ip:port` from its pool (set MAINT then delete). |
-| `drain`    | `vctl lb drain <ep> [--pool <name>]`        | Mark backend as DRAIN — stops new traffic, finishes in-flight requests. |
-| `attach`   | `vctl lb attach [port]`                     | Probe `localhost:<port>/v1/models` then add self to the matching pool (default port: 8000). |
-| `detach`   | `vctl lb detach [--force]`                  | Drain self, wait for in-flight to drain, remove. `--force` drops active sessions before removal. |
-| `auto-add` | `vctl lb auto-add`                          | Re-register every backend from the state file (post-restart recovery). |
-| `prune`    | `vctl lb prune [--pool P] [--threshold D] [--dry-run]` | Remove health-check-failed (DOWN) backends that have been down past the threshold. |
+| Verb       | Synopsis                                           | Description |
+|------------|----------------------------------------------------|-------------|
+| `add`      | `tctl haproxy add <ep> [--pool <name>]`            | Register `ip:port` in a pool (idempotent). Auto-routes by `/v1/models` probe; `--pool` skips the probe. |
+| `remove`   | `tctl haproxy remove <ep>`                         | Drop `ip:port` from its pool (set MAINT then delete). |
+| `drain`    | `tctl haproxy drain <ep> [--pool <name>]`          | Mark backend as DRAIN — stops new traffic, finishes in-flight requests. |
+| `scaling`  | `tctl haproxy scaling <attach\|detach\|auto-add>`  | Self-registration scaling sub-commands (see below). |
+| `prune`    | `tctl haproxy prune [--pool P] [--threshold D] [--dry-run]` | Remove health-check-failed (DOWN) backends that have been down past the threshold. |
 
-**`vctl lb prune` flags:**
+#### `tctl haproxy scaling` sub-commands
+
+| Sub-verb   | Description |
+|------------|-------------|
+| `attach [port]`  | Probe `localhost:<port>/v1/models` then add self to the matching pool (default port: 8000). |
+| `detach [--force]` | Drain self, wait for in-flight to drain, remove. `--force` drops active sessions before removal. |
+| `auto-add` | Re-register every backend from the state file (post-restart recovery). |
+
+**`tctl haproxy prune` flags:**
 
 | Flag              | Description |
 |-------------------|-------------|
 | `--pool <name>`   | Scope to one pool (default: all pools); exit 3 on unknown pool name |
-| `--threshold D`   | Override dead threshold (e.g. `5m`, `300s`, `2h`); default: `cluster.lb.prune.threshold` or `5m` |
+| `--threshold D`   | Override dead threshold (e.g. `5m`, `300s`, `2h`); default: `cluster.haproxy.prune.threshold` or `5m` |
 | `--dry-run`       | Print candidates without removing; exit 0 |
 
 ---
 
-### `vctl config`
+## `tctl lmms` — lmms-eval workload (hidden)
 
-**Synopsis:** `vctl config <verb>`
+**Synopsis:** `tctl lmms <verb>`
 
-Inspect and manage vctl configuration files.
+Manages the lmms-eval run loop. Hidden from top-level help but fully functional.
 
-| Verb              | Synopsis                         | Description |
-|-------------------|----------------------------------|-------------|
-| `validate <path>` | `vctl config validate <path>`    | Validate `cluster.yaml` or `models/<name>.yaml` against the Pydantic schema. Exit 2 on any error. |
-| `show`            | `vctl config show`               | Print the fully-resolved runtime config with env overrides applied (YAML). |
-| `schema`          | `vctl config schema`             | Dump the JSON Schema for `ClusterFile` and `ProfileFile`. |
+| Verb       | Synopsis                | Description |
+|------------|-------------------------|-------------|
+| `run-loop` | `tctl lmms run-loop`    | Start `run_loop.sh` in a detached tmux session `tctl-lmms` (with venv activated). |
+| `stop`     | `tctl lmms stop`        | Kill the `tctl-lmms` tmux session. |
+| `status`   | `tctl lmms status`      | Show whether `tctl-lmms` is running. |
 
 ---
 
-### `vctl init-config`
+## `tctl config` — schema and inspection
 
-**Synopsis:** `vctl init-config [--dir <path>] [--force] [--profiles a,b,...]`
+**Synopsis:** `tctl config <verb>`
 
-Scaffold `cluster.yaml` and `models/*.yaml` from canonical templates into `~/.vctl/`
+| Verb              | Synopsis                          | Description |
+|-------------------|-----------------------------------|-------------|
+| `validate <path>` | `tctl config validate <path>`     | Validate `cluster.yaml` or `models/<name>.yaml` against the Pydantic schema. Exit 2 on any error. |
+| `show`            | `tctl config show`                | Print the fully-resolved runtime config with env overrides applied (YAML). |
+| `schema`          | `tctl config schema`              | Dump the JSON Schema for `ClusterFile` and `ProfileFile`. |
+
+---
+
+## `tctl init-config` — bootstrap
+
+**Synopsis:** `tctl init-config [--dir <path>] [--force] [--profiles a,b,...]`
+
+Scaffold `cluster.yaml` and `models/*.yaml` from canonical templates into `~/.tctl/`
 (or `--dir`). Every field is documented inline.
 
 | Flag                | Description |
 |---------------------|-------------|
-| `--dir <path>`      | Write into `<path>` instead of `~/.vctl/` |
+| `--dir <path>`      | Write into `<path>` instead of `~/.tctl/` |
 | `--force`           | Overwrite existing files without prompting |
 | `--profiles a,b,c`  | Scaffold only the named profiles (default: all built-in) |
 
@@ -282,22 +304,21 @@ Built-in profiles: `qwen3_5-9b`, `qwen3-vl-30b-a3b`.
 
 ## Configuration
 
-Schema classes live in `src/vctl/config/models.py` (Pydantic v2, `extra="forbid"`).
+Schema classes live in `src/tctl/config/models.py` (Pydantic v2, `extra="forbid"`).
 
 **Config resolution order:**
 
 1. `--config <path>` CLI flag
 2. `CLUSTER_CONFIG` env var
-3. `~/.vctl/cluster.yaml`
+3. `~/.tctl/cluster.yaml`
 
 **Profile resolution order:**
 
 1. `--profile <name>` CLI flag
-2. `VCTL_PROFILE` env var
-3. `MODEL_PROFILE` env var
-4. `cluster.profile` field in `cluster.yaml`
+2. `TCTL_PROFILE` env var
+3. `cluster.vllm.default_profile` field in `cluster.yaml`
 
-**VCTL_* env overrides:** pattern `VCTL_<TOPLEVEL>__<NESTED>__...=value`.
+**TCTL_* env overrides:** pattern `TCTL_<TOPLEVEL>__<NESTED>__...=value`.
 Double underscore is the nesting delimiter; first segment must match a top-level field.
 
 ---
@@ -306,24 +327,24 @@ Double underscore is the nesting delimiter; first segment must match a top-level
 
 | Path | Purpose |
 |------|---------|
-| `~/.vctl/cluster.yaml` | Cluster config |
-| `~/.vctl/models/<profile>.yaml` | Per-profile config |
-| `~/.vctl/lb/haproxy.cfg` | Rendered HAProxy config |
-| `~/.vctl/lb/haproxy.pid` | HAProxy PID file |
-| `~/.vctl/lb/haproxy.sock` | HAProxy admin socket (local) |
-| `~/.vctl/lb/watch.pid` | Sentinel for `tmux:vctl-lb-watch` watcher session |
+| `~/.tctl/cluster.yaml` | Cluster config |
+| `~/.tctl/models/<profile>.yaml` | Per-profile config |
+| `~/.tctl/haproxy/haproxy.cfg` | Rendered HAProxy config |
+| `~/.tctl/haproxy/haproxy.pid` | HAProxy PID file |
+| `~/.tctl/haproxy/haproxy.sock` | HAProxy admin socket (local) |
+| `~/.tctl/haproxy/watch.pid` | Sentinel for `tmux:tctl-haproxy-watch` watcher session |
 | `<state_dir>/<lb_host>/<pool>_backends.txt` | Per-pool backend list (flock-protected) |
 | `<state_dir>/<lb_host>/<pool>_backends.lock` | Lock sidecar (stable across `os.replace`) |
-| `~/.vctl/lb/rolling-restart/<pool>.json` | Rolling-restart session file (per-pool) |
-| `~/.vctl/vllm/<host>/<profile>.pid` | Tracked vllm PID |
-| `~/.vctl/vllm/<host>/<profile>.log` | vllm log (piped from tmux) |
-| `~/.vctl/vllm/<host>/<profile>.cmd.json` | Snapshot of resolved config at start time |
-| `~/.vctl/vllm/<host>/<profile>.host` | Originating host IP |
+| `~/.tctl/vllm/rolling-restart/<pool>.json` | Rolling-restart session file (per-pool) |
+| `~/.tctl/vllm/<host>/<profile>.pid` | Tracked vllm PID |
+| `~/.tctl/vllm/<host>/<profile>.log` | vllm log (piped from tmux) |
+| `~/.tctl/vllm/<host>/<profile>.cmd.json` | Snapshot of resolved config at start time |
+| `~/.tctl/vllm/<host>/<profile>.host` | Originating host IP |
 
 ---
 
 ## See also
 
 - [`docs/CHANGELOG.md`](CHANGELOG.md) — version history
-- [`docs/RESTART.md`](RESTART.md) — safe restart procedures
+- [`docs/COOKBOOK-workloads.md`](COOKBOOK-workloads.md) — adding a new workload
 - [`README.md`](../README.md) — getting started and multi-pool guide
