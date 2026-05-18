@@ -2,12 +2,14 @@
 
 ## In Progress
 
-- **vctl → tctl rename + workload reorg (v0.9.0).** Rename project to `tctl` and reorganize into workload sub-command groups (`tctl vllm`, `tctl haproxy`, `tctl lmms`) for easy extension (e.g. future `tctl lmdeploy`). Breaking: cluster.yaml schema (`lb:` → `haproxy:`, top-level `profile:` → `vllm.default_profile`), env vars (`VCTL_*` → `TCTL_*`), state paths (`~/.vctl/*` → `~/.tctl/*`), tmux session names. No backwards compat. Spec: [specs/2026-05-09-tctl-rename-workload-reorg-design.md](specs/2026-05-09-tctl-rename-workload-reorg-design.md) — 12 ATs.
+_(none — v0.9.0 shipped 2026-05-18)_
 
 ## Up Next
 
-- **Prometheus metrics endpoint** (`vctl lb metrics`).
-- **Multi-cluster support** (`~/.config/vctl/clusters/<name>.yaml` + `--cluster <name>`).
+- **Prometheus metrics endpoint** (`tctl haproxy metrics`).
+- **Multi-cluster support** (`~/.tctl/clusters/<name>.yaml` + `--cluster <name>`).
+- **`ResolvedConfig.lb` → `ResolvedConfig.haproxy` rename.** Cosmetic — YAML key is `haproxy:` but Python field name is still `lb`. Picked up post-v0.9.0 review.
+- **`_rolling_restart_session_path` → `@staticmethod`.** Currently called via `VllmManager.__new__(VllmManager)._rolling_restart_session_path(pool)` hack. Method touches no `self.*`. Convert to staticmethod.
 
 ## Ideas (Unprioritized)
 
@@ -26,6 +28,17 @@
 - **F5** *(probably wontfix)*: emit `daemon` directive in `render.py` + redirect stdout log to a file. F1's pidfile/pgrep fallback already covers status/stop; tradeoff (lose interactive `tmux attach`) outweighs the marginal pidfile cleanliness gain.
 
 ## Completed
+
+### 2026-05-18 — v0.9.0 vctl → tctl rename + workload reorg
+
+- **Project rename:** `vctl` → `tctl`. PyPI, CLI entry, `src/tctl/`, env-var prefix `TCTL_*`, state paths `~/.tctl/`.
+- **Workload sub-trees:** `tctl vllm`, `tctl haproxy`, `tctl lmms` (hidden). Platform cmds (`tctl config`, `tctl init-config`) stay flat. Cookbook at `docs/COOKBOOK-workloads.md` — 3 steps to add new workload (e.g. lmdeploy).
+- **cluster.yaml schema:** `apiVersion: tctl/v1`, `lb:` → `haproxy:`, top-level `profile:` → `vllm.default_profile`.
+- **`tctl vllm stop` merge:** drain LB + tmux kill + local-tree kill in one verb. `serve stop` sub-verb dropped.
+- **Tmux session names:** `vctl-*` → `tctl-*` everywhere.
+- 14 commits, 12 task SHAs + spec/plan/cookbook commit + cookbook fix. 112 files changed (+8909/-10112). All 12 ATs pass; coverage 62%.
+- Spec: [specs/2026-05-09-tctl-rename-workload-reorg-design.md](specs/2026-05-09-tctl-rename-workload-reorg-design.md) — 12 ATs.
+- Plan: [plans/2026-05-09-tctl-rename-workload-reorg.md](plans/2026-05-09-tctl-rename-workload-reorg.md) — 12 tasks.
 
 ### 2026-05-09 — v0.8.0 TmuxSession refactor (unified env propagation)
 

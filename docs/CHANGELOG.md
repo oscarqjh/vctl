@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
-## [0.9.0] - 2026-05-09
+## [0.9.0] - 2026-05-18
 
 ### Breaking — project rename + workload reorg (no backwards compat)
 
