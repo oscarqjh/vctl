@@ -11,6 +11,8 @@ import sys
 import time
 from pathlib import Path
 
+from tctl.tmux import TmuxSession
+
 _LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -444,6 +446,54 @@ def _delete_one(path: Path, jobs: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Detached tmux spawn
+# ---------------------------------------------------------------------------
+
+
+def _spawn_detached(
+    paths: list[Path],
+    jobs: int,
+    log_dir: Path,
+    session_id: str,
+) -> int:
+    """Spawn the deletion in a detached tmux session named tctl-fastrm-<id>.
+
+    Each detach call gets a unique 6-hex id, so multiple -d runs coexist.
+    Caller must NOT call this when --dry-run is set (spec §4.8).
+
+    Returns 0 on successful spawn (always — the spawn itself rarely fails;
+    if the deletion later fails, operator sees it in the log file).
+    """
+    session_name = f"tctl-fastrm-{session_id}"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{session_id}.log"
+
+    # Build the foreground re-invocation command. tctl is the entry point;
+    # use `python -m tctl fast-rm <paths> -j N -y` to avoid PATH dependency.
+    # NOTE: in detached form we pass -y (no prompt; already confirmed in foreground)
+    #       and -q (no need to rescan inside tmux session).
+    argv_inner = [
+        sys.executable,
+        "-m",
+        "tctl",
+        "fast-rm",
+        *[str(p) for p in paths],
+        "-j",
+        str(jobs),
+        "-y",
+        "-q",
+    ]
+
+    session = TmuxSession(session_name, log_path=log_path)
+    session.start(argv_inner)
+
+    print(f"Detached as {session_name}", file=sys.stderr)
+    print(f"  attach: tmux attach -t {session_name}", file=sys.stderr)
+    print(f"  logs:   {log_path}", file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Argparse
 # ---------------------------------------------------------------------------
 
@@ -613,10 +663,12 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         return 0  # user aborted; not an error
 
     # ------------------------------------------------------------------
-    # --detach: Task 5
+    # --detach: spawn tmux session, return immediately
     # ------------------------------------------------------------------
     if parsed.detach:
-        raise NotImplementedError("--detach not yet implemented")
+        session_id = os.urandom(3).hex()
+        log_dir = Path.home() / ".tctl" / "fastrm"
+        return _spawn_detached(valid, parsed.jobs, log_dir, session_id)
 
     # ------------------------------------------------------------------
     # Foreground deletion loop

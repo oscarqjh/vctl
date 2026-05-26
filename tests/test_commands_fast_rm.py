@@ -578,3 +578,188 @@ def test_summary_includes_success_and_failure_counts(
     assert "succeeded" in full_output.lower()
     assert "failed" in full_output.lower()
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 5: --detach via TmuxSession (AT-7, AT-8, AT-11 + extras)
+# ---------------------------------------------------------------------------
+
+
+# AT-7: -d spawns tmux session
+def test_at7_detach_spawns_tmux_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "deep" / "to_detach"
+    target.mkdir(parents=True)
+    (target / "file").write_text("x")
+
+    spawned_sessions: list[str] = []
+    started_argvs: list[list[str]] = []
+
+    class FakeSession:
+        def __init__(
+            self,
+            name: str,
+            env: dict[str, str] | None = None,
+            log_path: Path | None = None,
+        ) -> None:
+            self.name = name
+            self.log_path = log_path
+            spawned_sessions.append(name)
+
+        def start(self, argv: list[str] | str) -> None:
+            started_argvs.append(argv if isinstance(argv, list) else [argv])
+
+    monkeypatch.setattr("tctl.commands.fast_rm.TmuxSession", FakeSession)
+
+    import argparse
+
+    ns = argparse.Namespace()
+    rc = run(ns, [str(target), "-d", "-y", "-q"])
+
+    assert rc == 0
+    assert len(spawned_sessions) == 1
+    assert spawned_sessions[0].startswith("tctl-fastrm-")
+    assert len(spawned_sessions[0]) == len("tctl-fastrm-") + 6  # 6 hex chars
+    # Target still exists — actual deletion runs inside the (faked) tmux session
+    assert target.exists()
+
+
+# AT-8: two -d in succession spawn 2 distinct sessions
+def test_at8_two_detach_in_succession_distinct_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_a = tmp_path / "deep" / "a"
+    target_a.mkdir(parents=True)
+    target_b = tmp_path / "deep" / "b"
+    target_b.mkdir(parents=True)
+
+    spawned: list[str] = []
+
+    class FakeSession:
+        def __init__(
+            self,
+            name: str,
+            env: dict[str, str] | None = None,
+            log_path: Path | None = None,
+        ) -> None:
+            spawned.append(name)
+
+        def start(self, argv: list[str] | str) -> None:
+            pass
+
+    monkeypatch.setattr("tctl.commands.fast_rm.TmuxSession", FakeSession)
+
+    import argparse
+
+    ns = argparse.Namespace()
+    rc1 = run(ns, [str(target_a), "-d", "-y", "-q"])
+    rc2 = run(ns, [str(target_b), "-d", "-y", "-q"])
+
+    assert rc1 == 0
+    assert rc2 == 0
+    assert len(spawned) == 2
+    assert spawned[0] != spawned[1]  # distinct ids
+    assert all(s.startswith("tctl-fastrm-") for s in spawned)
+
+
+# AT-11: --dry-run --detach does NOT spawn
+def test_at11_dry_run_overrides_detach(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "deep" / "no_spawn"
+    target.mkdir(parents=True)
+    (target / "x").write_text("y")
+
+    spawned: list[str] = []
+
+    class FakeSession:
+        def __init__(
+            self,
+            name: str,
+            env: dict[str, str] | None = None,
+            log_path: Path | None = None,
+        ) -> None:
+            spawned.append(name)
+
+        def start(self, argv: list[str] | str) -> None:
+            raise AssertionError("must not start when --dry-run --detach")
+
+    monkeypatch.setattr("tctl.commands.fast_rm.TmuxSession", FakeSession)
+
+    import argparse
+
+    ns = argparse.Namespace()
+    rc = run(ns, [str(target), "--dry-run", "-d", "-y"])
+
+    assert rc == 0
+    assert spawned == []  # no TmuxSession instantiated
+    assert target.exists()
+
+
+# Detach: log path is under ~/.tctl/fastrm/
+def test_detach_log_path_under_tctl_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "deep" / "log_check"
+    target.mkdir(parents=True)
+
+    log_paths: list[Path] = []
+
+    class FakeSession:
+        def __init__(
+            self,
+            name: str,
+            env: dict[str, str] | None = None,
+            log_path: Path | None = None,
+        ) -> None:
+            log_paths.append(log_path if log_path else Path())
+
+        def start(self, argv: list[str] | str) -> None:
+            pass
+
+    fake_home = tmp_path / "myhome"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+    monkeypatch.setattr("tctl.commands.fast_rm.TmuxSession", FakeSession)
+
+    import argparse
+
+    ns = argparse.Namespace()
+    run(ns, [str(target), "-d", "-y", "-q"])
+
+    assert len(log_paths) == 1
+    assert str(log_paths[0]).startswith(str(fake_home / ".tctl" / "fastrm"))
+    assert log_paths[0].suffix == ".log"
+    # Parent dir auto-created
+    assert log_paths[0].parent.exists()
+
+
+# Detach: argv re-invokes tctl fast-rm with paths + -j + -y + -q
+def test_detach_argv_re_invokes_tctl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "deep" / "argv_check"
+    target.mkdir(parents=True)
+
+    started_argvs: list[list[str]] = []
+
+    class FakeSession:
+        def __init__(
+            self,
+            name: str,
+            env: dict[str, str] | None = None,
+            log_path: Path | None = None,
+        ) -> None: ...
+
+        def start(self, argv: list[str] | str) -> None:
+            if isinstance(argv, list):
+                started_argvs.append(argv)
+
+    monkeypatch.setattr("tctl.commands.fast_rm.TmuxSession", FakeSession)
+
+    import argparse
+
+    ns = argparse.Namespace()
+    run(ns, [str(target), "-d", "-y", "-j", "8"])
+
+    assert len(started_argvs) == 1
+    argv = started_argvs[0]
+    assert "tctl" in " ".join(argv)
+    assert "fast-rm" in argv
+    assert str(target.resolve()) in argv
+    assert "-j" in argv and "8" in argv
+    assert "-y" in argv
