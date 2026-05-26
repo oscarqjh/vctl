@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 _LOG = logging.getLogger(__name__)
@@ -276,6 +278,172 @@ def _confirm(
 
 
 # ---------------------------------------------------------------------------
+# Rename-then-rm helper
+# ---------------------------------------------------------------------------
+
+
+def _rename_for_deletion(target: Path, suffix_id: str) -> Path:
+    """Atomically rename target → target.deleting-<id>; return the new path.
+
+    Makes the path disappear from listings instantly.  Deletion then runs on
+    the renamed path so the original name is free immediately.
+
+    Falls back to returning the original path on:
+    - EXDEV  (cross-filesystem — rename across mount points not possible)
+    - EPERM / EACCES  (permission denied — read-only parent directory)
+    - EEXIST  (1-in-16M id collision with an existing stale .deleting-<id>)
+
+    A WARNING is logged in all fallback cases.  Any other ``OSError`` is
+    re-raised so the caller can decide how to proceed.
+    """
+    renamed = target.with_name(target.name + f".deleting-{suffix_id}")
+    try:
+        os.rename(target, renamed)
+        return renamed
+    except OSError as exc:
+        reasons = {
+            errno.EXDEV: "cross-filesystem",
+            errno.EPERM: "permission denied",
+            errno.EACCES: "permission denied",
+            errno.EEXIST: "stale .deleting-<id> path exists",
+        }
+        if exc.errno in reasons:
+            _LOG.warning(
+                "rename-then-rm failed (%s); deleting %s in place. "
+                "Listings will show the path until deletion completes.",
+                reasons[exc.errno],
+                target,
+            )
+            return target
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Subprocess pipe helper: find | xargs rm
+# ---------------------------------------------------------------------------
+
+
+def _pipe_find_xargs_rm(root: Path, type_flag: str, parallel_jobs: int) -> bool:
+    """Run ``find ROOT -type TYPE -print0 | xargs -0 -r -P N -n 1000 rm -f``.
+
+    Uses ``subprocess.Popen`` chaining — no ``shell=True``.
+
+    Returns True if both processes exit 0.
+    """
+    try:
+        find_proc = subprocess.Popen(
+            ["find", str(root), "-type", type_flag, "-print0"],
+            stdout=subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        _LOG.error("find binary not available")
+        return False
+
+    assert find_proc.stdout is not None  # for mypy
+
+    xargs_argv = [
+        "xargs",
+        "-0",
+        "-r",
+        "-P",
+        str(parallel_jobs),
+        "-n",
+        "1000",
+        "rm",
+        "-f",
+    ]
+    try:
+        xargs_proc = subprocess.Popen(
+            xargs_argv,
+            stdin=find_proc.stdout,
+        )
+    except FileNotFoundError:
+        find_proc.kill()
+        find_proc.wait()
+        _LOG.error("xargs binary not available")
+        return False
+
+    # Allow find to receive SIGPIPE when xargs closes its end.
+    find_proc.stdout.close()
+    xargs_rc = xargs_proc.wait()
+    find_rc = find_proc.wait()
+
+    if find_rc != 0:
+        _LOG.error("find exited rc=%d for %s", find_rc, root)
+        return False
+    if xargs_rc != 0:
+        _LOG.error("xargs exited rc=%d for %s", xargs_rc, root)
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 3-phase deletion
+# ---------------------------------------------------------------------------
+
+
+def _delete_one(path: Path, jobs: int) -> bool:
+    """Three-phase deletion of ``path``.
+
+    Phase 1: parallel rm of regular files via
+        find -type f -print0 | xargs -0 -r -P N -n 1000 rm -f
+    Phase 2: symlink cleanup (best-effort, non-fatal)
+        find -type l -print0 | xargs -0 -r rm -f
+    Phase 3: bottom-up empty-dir rmdir
+        find -depth -type d -empty -delete
+    Final: ``path.rmdir()`` once the tree is empty.
+
+    Returns True on success, False if any phase returns non-zero or the
+    top-level directory is non-empty after phase 3.
+
+    ``subprocess.Popen`` chaining is used for phases 1-2 (no ``shell=True``).
+    Phase 3 uses ``subprocess.run`` with an argv list.
+    """
+    _LOG.info("phase 1/3: parallel rm files (jobs=%d) for %s", jobs, path)
+    if not _pipe_find_xargs_rm(path, "f", parallel_jobs=jobs):
+        _LOG.error("phase 1 failed for %s", path)
+        return False
+
+    # Phase 2: symlinks — best-effort; failure here is non-fatal.
+    _LOG.info("phase 2/3: rm symlinks for %s", path)
+    _pipe_find_xargs_rm(path, "l", parallel_jobs=1)  # ignore rc
+
+    # Phase 3: empty-dir sweep.
+    _LOG.info("phase 3/3: rmdir empty subdirs for %s", path)
+    try:
+        result = subprocess.run(
+            ["find", str(path), "-depth", "-type", "d", "-empty", "-delete"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        _LOG.error("find binary not available")
+        return False
+
+    if result.returncode != 0:
+        _LOG.error("phase 3 failed for %s: %s", path, result.stderr.strip())
+        return False
+
+    # Final rmdir of the top-level directory.
+    if path.exists():
+        try:
+            remaining = list(path.iterdir())
+        except OSError:
+            remaining = []
+        if remaining:
+            _LOG.warning(
+                "%s not empty after deletion; remaining: %s",
+                path,
+                [str(r) for r in remaining[:10]],
+            )
+            return False
+        path.rmdir()
+
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Argparse
 # ---------------------------------------------------------------------------
 
@@ -445,10 +613,41 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         return 0  # user aborted; not an error
 
     # ------------------------------------------------------------------
-    # Task 3-5 will add deletion loop + --detach
+    # --detach: Task 5
     # ------------------------------------------------------------------
-    print(
-        f"VALIDATED + CONFIRMED: {len(valid)} path(s) ready (Tasks 3-5 pending)",
-        file=sys.stderr,
-    )
-    return 0
+    if parsed.detach:
+        raise NotImplementedError("--detach not yet implemented")
+
+    # ------------------------------------------------------------------
+    # Foreground deletion loop
+    # ------------------------------------------------------------------
+    t0_total = time.monotonic()
+    success_count = 0
+    failure_count = 0
+    failed_paths: list[str] = []
+    suffix_id = os.urandom(3).hex()
+
+    for idx, target_path in enumerate(valid, start=1):
+        print(f"\n[{idx}/{len(valid)}] {target_path}", file=sys.stderr)
+        renamed = _rename_for_deletion(target_path, suffix_id)
+        ok = _delete_one(renamed, parsed.jobs)
+        if ok:
+            success_count += 1
+        else:
+            failure_count += 1
+            failed_paths.append(str(target_path))  # report original path
+
+    elapsed = time.monotonic() - t0_total
+    print("\n" + "=" * 64)
+    print(f"Done in {elapsed:.0f}s.")
+    print(f"  succeeded: {success_count}")
+    print(f"  failed:    {failure_count}")
+    if invalid_count > 0:
+        print(f"  skipped (invalid pre-validation): {invalid_count}")
+    if failed_paths:
+        print("Failed paths:")
+        for fp in failed_paths:
+            print(f"  - {fp}")
+    print("=" * 64)
+
+    return 1 if failure_count > 0 else 0

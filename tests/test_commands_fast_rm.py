@@ -270,3 +270,178 @@ def test_prescan_counts_files_and_bytes(tmp_path: Path) -> None:
     file_count, total_bytes = _prescan([target])
     assert file_count == 3
     assert total_bytes >= 14  # du -sb may include dir entries; lenient check
+
+
+# ===========================================================================
+# Task 3: _rename_for_deletion + _delete_one + _pipe_find_xargs_rm
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# _rename_for_deletion: EXDEV fallback
+# ---------------------------------------------------------------------------
+
+
+def test_rename_for_deletion_falls_back_on_exdev(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import errno as _errno
+
+    from tctl.commands.fast_rm import _rename_for_deletion
+
+    target = tmp_path / "deep" / "subdir"
+    target.mkdir(parents=True)
+
+    def fail_exdev(src: object, dst: object) -> None:
+        raise OSError(_errno.EXDEV, "cross-device link")
+
+    monkeypatch.setattr("tctl.commands.fast_rm.os.rename", fail_exdev)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="tctl.commands.fast_rm"):
+        result = _rename_for_deletion(target, "ab12cd")
+
+    assert result == target  # fallback to original
+    assert "cross-filesystem" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# _rename_for_deletion: EEXIST collision fallback
+# ---------------------------------------------------------------------------
+
+
+def test_rename_for_deletion_falls_back_on_eexist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import errno as _errno
+
+    from tctl.commands.fast_rm import _rename_for_deletion
+
+    target = tmp_path / "deep" / "subdir"
+    target.mkdir(parents=True)
+
+    def fail_eexist(src: object, dst: object) -> None:
+        raise OSError(_errno.EEXIST, "file exists")
+
+    monkeypatch.setattr("tctl.commands.fast_rm.os.rename", fail_eexist)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="tctl.commands.fast_rm"):
+        result = _rename_for_deletion(target, "ab12cd")
+
+    assert result == target
+    assert "stale" in caplog.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# _rename_for_deletion: arbitrary OSError re-raised
+# ---------------------------------------------------------------------------
+
+
+def test_rename_for_deletion_reraises_other_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno as _errno
+
+    from tctl.commands.fast_rm import _rename_for_deletion
+
+    target = tmp_path / "deep" / "subdir"
+    target.mkdir(parents=True)
+
+    def fail_eio(src: object, dst: object) -> None:
+        raise OSError(_errno.EIO, "I/O error")
+
+    monkeypatch.setattr("tctl.commands.fast_rm.os.rename", fail_eio)
+
+    with pytest.raises(OSError) as exc_info:
+        _rename_for_deletion(target, "ab12cd")
+    assert exc_info.value.errno == _errno.EIO
+
+
+# ---------------------------------------------------------------------------
+# _rename_for_deletion: success path
+# ---------------------------------------------------------------------------
+
+
+def test_rename_for_deletion_succeeds(tmp_path: Path) -> None:
+    from tctl.commands.fast_rm import _rename_for_deletion
+
+    target = tmp_path / "deep" / "to_delete"
+    target.mkdir(parents=True)
+    (target / "marker").write_text("x")
+
+    renamed = _rename_for_deletion(target, "abcdef")
+
+    assert renamed.name.endswith(".deleting-abcdef")
+    assert renamed.exists()
+    assert not target.exists()
+    assert (renamed / "marker").exists()
+
+
+# ---------------------------------------------------------------------------
+# AT-10: rename trick — original path disappears before deletion completes
+# ---------------------------------------------------------------------------
+
+
+def test_at10_rename_trick_path_disappears_immediately(tmp_path: Path) -> None:
+    from tctl.commands.fast_rm import _delete_one, _rename_for_deletion
+
+    target = tmp_path / "deep" / "instant"
+    target.mkdir(parents=True)
+    for i in range(10):
+        (target / f"file_{i}").write_text("x" * 100)
+
+    # Rename first — original path disappears here.
+    renamed = _rename_for_deletion(target, "test1")
+    assert not target.exists(), "original must be gone after rename"
+    assert renamed.exists(), "renamed path must exist for deletion"
+
+    # Now delete the renamed path.
+    ok = _delete_one(renamed, jobs=2)
+    assert ok
+    assert not renamed.exists()
+
+
+# ---------------------------------------------------------------------------
+# _delete_one: end-to-end on small tree
+# ---------------------------------------------------------------------------
+
+
+def test_delete_one_removes_tree(tmp_path: Path) -> None:
+    from tctl.commands.fast_rm import _delete_one
+
+    target = tmp_path / "deep" / "tree"
+    target.mkdir(parents=True)
+    for i in range(5):
+        (target / f"f{i}").write_text(str(i))
+    sub = target / "sub"
+    sub.mkdir()
+    for i in range(3):
+        (sub / f"g{i}").write_text(str(i))
+
+    ok = _delete_one(target, jobs=2)
+    assert ok
+    assert not target.exists()
+
+
+# ---------------------------------------------------------------------------
+# _delete_one: symlinks cleaned in phase 2
+# ---------------------------------------------------------------------------
+
+
+def test_delete_one_removes_symlinks(tmp_path: Path) -> None:
+    from tctl.commands.fast_rm import _delete_one
+
+    target = tmp_path / "deep" / "with_links"
+    target.mkdir(parents=True)
+    real = tmp_path / "real.txt"
+    real.write_text("real")
+    (target / "link_to_real").symlink_to(real)
+    (target / "file.txt").write_text("regular")
+
+    ok = _delete_one(target, jobs=2)
+    assert ok
+    assert not target.exists()
+    assert real.exists()  # symlink target not affected
