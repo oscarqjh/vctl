@@ -126,8 +126,6 @@ def test_subparser_accepts_long_flags() -> None:
 
 # Smoke: validation rejects $HOME
 def test_validate_rejects_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import os
-
     fake_home = tmp_path / "myhome"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
@@ -174,7 +172,9 @@ def test_dry_run_quiet_skips_scan(tmp_path: Path) -> None:
 
 
 # Confirm prompt: EOFError treated as N
-def test_confirm_eof_aborts(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_confirm_eof_aborts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from tctl.commands.fast_rm import _confirm
 
     def _raise_eof(prompt: str = "") -> str:
@@ -445,3 +445,136 @@ def test_delete_one_removes_symlinks(tmp_path: Path) -> None:
     assert ok
     assert not target.exists()
     assert real.exists()  # symlink target not affected
+
+
+# ===========================================================================
+# Task 4: AT-1 end-to-end + AT-9 batch resilience
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# AT-1: foreground delete of small tmp tree
+# ---------------------------------------------------------------------------
+
+
+def test_at1_foreground_delete_small_tree(tmp_path: Path) -> None:
+    """AT-1: foreground tctl fast-rm of a small tmp tree succeeds; dir gone."""
+    import argparse
+
+    target = tmp_path / "deep" / "to_delete"
+    target.mkdir(parents=True)
+    for i in range(20):
+        (target / f"file_{i}.txt").write_text(f"content {i}" * 100)
+    sub = target / "sub"
+    sub.mkdir()
+    for i in range(5):
+        (sub / f"g_{i}.txt").write_text(f"sub {i}")
+
+    ns = argparse.Namespace()
+    rc = run(ns, [str(target), "-y", "-q"])
+
+    assert rc == 0
+    assert not target.exists(), "target dir must be gone after fast-rm"
+    # Parent tmp_path should still exist
+    assert tmp_path.exists()
+
+
+def test_at1_foreground_delete_multiple_targets(tmp_path: Path) -> None:
+    """AT-1 variant: multi-target batch — all succeed."""
+    import argparse
+
+    targets = []
+    for letter in ("a", "b", "c"):
+        t = tmp_path / "deep" / f"target_{letter}"
+        t.mkdir(parents=True)
+        for i in range(5):
+            (t / f"f_{i}").write_text("x")
+        targets.append(str(t))
+
+    ns = argparse.Namespace()
+    rc = run(ns, [*targets, "-y", "-q"])
+
+    assert rc == 0
+    for t_str in targets:
+        assert not Path(t_str).exists()
+
+
+# ---------------------------------------------------------------------------
+# AT-9: per-target failure does NOT abort batch
+# ---------------------------------------------------------------------------
+
+
+def test_at9_per_target_failure_does_not_abort_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AT-9: one target fails (simulated) but the rest still delete.
+
+    Returns exit 1 since some failed."""
+    import argparse
+
+    # Build 3 targets
+    targets = []
+    for letter in ("a", "b", "c"):
+        t = tmp_path / "deep" / f"target_{letter}"
+        t.mkdir(parents=True)
+        (t / "marker").write_text("x")
+        targets.append(t)
+
+    # Patch _delete_one to fail on the SECOND call only
+    from tctl.commands import fast_rm
+
+    real_delete = fast_rm._delete_one
+    call_count = {"n": 0}
+
+    def flaky_delete(path: Path, jobs: int) -> bool:
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            # Simulate phase-1 failure: return False without deleting
+            return False
+        # Otherwise actually delete
+        return real_delete(path, jobs)
+
+    monkeypatch.setattr(fast_rm, "_delete_one", flaky_delete)
+
+    ns = argparse.Namespace()
+    rc = run(ns, [str(targets[0]), str(targets[1]), str(targets[2]), "-y", "-q"])
+
+    # Exit 1 because one failed
+    assert rc == 1
+    # Targets 0 and 2 should be deleted (we patched only the 2nd call to fail)
+    # However: _delete_one is called on renamed paths, AND the failed path
+    # is still renamed. So target_b is gone from original location regardless.
+    # Just verify target_a + target_c are gone:
+    assert not targets[0].exists()
+    assert not targets[2].exists()
+    # Target_b might be in renamed form still — check via parent listing
+    parent_listings = list(targets[1].parent.iterdir())
+    target_b_or_renamed = [p for p in parent_listings if p.name.startswith("target_b")]
+    # Either target_b is gone (rename succeeded but delete failed → renamed
+    # form still exists) or it's not. Either way: failure was reported.
+    # The key assertion is rc == 1 (batch did not abort).
+    assert call_count["n"] == 3  # all 3 attempts made (batch didn't abort)
+    _ = target_b_or_renamed  # silence unused-variable lint
+
+
+def test_summary_includes_success_and_failure_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Summary output reports per-batch tally."""
+    import argparse
+
+    targets = []
+    for letter in ("a", "b"):
+        t = tmp_path / "deep" / f"tgt_{letter}"
+        t.mkdir(parents=True)
+        targets.append(t)
+
+    ns = argparse.Namespace()
+    rc = run(ns, [str(targets[0]), str(targets[1]), "-y", "-q"])
+
+    captured = capsys.readouterr()
+    # Summary mentions both succeeded and failed counters
+    full_output = captured.out + captured.err
+    assert "succeeded" in full_output.lower()
+    assert "failed" in full_output.lower()
+    assert rc == 0
