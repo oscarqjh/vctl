@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -137,6 +138,144 @@ def _load_list_file(path: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Pre-scan helpers
+# ---------------------------------------------------------------------------
+
+
+def _fmt_bytes(n: int) -> str:
+    """Format bytes as IEC suffix (e.g. 1234567 → '1.2MiB').
+
+    Uses binary prefixes (1 KiB = 1024 bytes).  No space between number
+    and unit, matching the task-2 spec.  Sub-KiB amounts are printed as
+    plain integer bytes (e.g. '1023B').
+    """
+    units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB")
+    if n < 1024:
+        return f"{n}B"
+    value: float = float(n)
+    for unit in units[1:]:
+        value /= 1024.0
+        if value < 1024.0 or unit == units[-1]:
+            return f"{value:.1f}{unit}"
+    return f"{n}B"  # unreachable — satisfies mypy
+
+
+def _scan_target(target: Path) -> tuple[int, int]:
+    """Return (file_count, total_bytes) for a single directory tree.
+
+    Shells out to ``find -type f`` (count newlines) and ``du -sb`` (parse
+    first column).  Both calls use ``check=False``; errors are logged to
+    stderr and the failing metric is returned as 0 (best-effort).
+    """
+    find_result = subprocess.run(
+        ["find", str(target), "-type", "f"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if find_result.returncode == 0:
+        file_count = find_result.stdout.count("\n")
+    else:
+        _LOG.warning(
+            "find failed for %s (rc=%d): %s",
+            target,
+            find_result.returncode,
+            find_result.stderr.strip(),
+        )
+        file_count = 0
+
+    du_result = subprocess.run(
+        ["du", "-sb", "--", str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    total_bytes = 0
+    if du_result.returncode == 0:
+        try:
+            total_bytes = int(du_result.stdout.split()[0])
+        except (IndexError, ValueError) as exc:
+            _LOG.warning("du output parse error for %s: %s", target, exc)
+    else:
+        _LOG.warning(
+            "du failed for %s (rc=%d): %s",
+            target,
+            du_result.returncode,
+            du_result.stderr.strip(),
+        )
+
+    return file_count, total_bytes
+
+
+def _prescan(paths: list[Path]) -> tuple[int, int]:
+    """Return (total_files, total_bytes) across all paths.
+
+    Best-effort — errors are logged to stderr and the failing path
+    contributes 0 to both totals.  Calls ``_scan_target`` per path.
+    """
+    total_files = 0
+    total_bytes = 0
+    for p in paths:
+        fc, tb = _scan_target(p)
+        total_files += fc
+        total_bytes += tb
+    return total_files, total_bytes
+
+
+def _confirm(
+    paths: list[Path],
+    file_count: int,
+    total_bytes: int,
+    jobs: int,
+    invalid_count: int,
+    assume_yes: bool,
+    quiet: bool,
+) -> bool:
+    """Print a summary block and ask for y/N confirmation.
+
+    Returns True if the user accepts (or ``assume_yes`` is set).
+
+    Spec §4.4 + IMPORTANT-4 fix:
+    - If ``quiet``, file count and size are shown as ``(skipped)``.
+    - If ``assume_yes``, skip the prompt entirely and return True.
+    - ``EOFError`` from ``input()`` is treated as 'N': prints an
+      explanatory message to stderr and returns False.
+    - Accepts y / Y / yes / YES.  Anything else → print 'Aborted.' and
+      return False.
+    """
+    print(f"About to delete {len(paths)} path(s):")
+    for p in paths:
+        print(f"  - {p}")
+    if quiet:
+        count_str = "(skipped)"
+        size_str = "(skipped)"
+    else:
+        count_str = str(file_count)
+        size_str = _fmt_bytes(total_bytes)
+    print(f"  files: {count_str}, total size: {size_str}")
+    if invalid_count > 0:
+        print(f"  (skipped {invalid_count} invalid path(s); see warnings above)")
+
+    if assume_yes:
+        return True
+
+    try:
+        ans = input(f"Proceed using {jobs} parallel jobs? [y/N] ")
+    except EOFError:
+        print(
+            "Aborted (no TTY for confirmation; use -y for non-interactive).",
+            file=sys.stderr,
+        )
+        return False
+
+    if ans.strip().lower() in ("y", "yes"):
+        return True
+
+    print("Aborted.", file=sys.stderr)
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Argparse
 # ---------------------------------------------------------------------------
 
@@ -261,22 +400,55 @@ def run(ns: argparse.Namespace, argv_rest: list[str]) -> int:
         )
         return 2
 
-    # Task 2 will add pre-scan + confirm
-    # Task 3-4 will add deletion loop
-    # Task 5 will add --detach
+    # ------------------------------------------------------------------
+    # Pre-scan (Part A / Part D wiring)
+    # ------------------------------------------------------------------
+    file_count = 0
+    total_bytes = 0
+    if not parsed.quiet:
+        print(f"Scanning {len(valid)} path(s) ...", file=sys.stderr)
+        file_count, total_bytes = _prescan(valid)
 
+    # ------------------------------------------------------------------
+    # Dry-run path (exits before confirmation prompt)
+    # ------------------------------------------------------------------
     if parsed.dry_run:
-        print(
-            f"DRY RUN: would delete {len(valid)} path(s); {invalid_count} skipped.",
-            file=sys.stderr,
-        )
+        if parsed.quiet:
+            size_str = "(skipped)"
+        elif total_bytes > 0:
+            size_str = _fmt_bytes(total_bytes)
+        else:
+            size_str = "0B"
+        print(f"\nDRY RUN: would delete {len(valid)} path(s):", file=sys.stderr)
         for vp in valid:
             print(f"  - {vp}", file=sys.stderr)
+        print(f"  files: {file_count}, total size: {size_str}", file=sys.stderr)
+        if invalid_count > 0:
+            print(
+                f"  (skipped {invalid_count} invalid path(s); see warnings above)",
+                file=sys.stderr,
+            )
         return 0
 
-    # Placeholder: deletion not yet implemented (Tasks 2-5)
+    # ------------------------------------------------------------------
+    # Confirmation prompt (Part C / Part D wiring)
+    # ------------------------------------------------------------------
+    if not _confirm(
+        paths=valid,
+        file_count=file_count,
+        total_bytes=total_bytes,
+        jobs=parsed.jobs,
+        invalid_count=invalid_count,
+        assume_yes=parsed.yes,
+        quiet=parsed.quiet,
+    ):
+        return 0  # user aborted; not an error
+
+    # ------------------------------------------------------------------
+    # Task 3-5 will add deletion loop + --detach
+    # ------------------------------------------------------------------
     print(
-        f"VALIDATED: {len(valid)} path(s) ready (Tasks 2-5 pending)",
+        f"VALIDATED + CONFIRMED: {len(valid)} path(s) ready (Tasks 3-5 pending)",
         file=sys.stderr,
     )
     return 0

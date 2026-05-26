@@ -133,3 +133,140 @@ def test_validate_rejects_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     monkeypatch.setenv("HOME", str(fake_home))
     # Use the env var by passing the absolute path
     assert _validate_path(str(fake_home)) is None
+
+
+# ===========================================================================
+# Task 2: pre-scan + confirmation prompt
+# ===========================================================================
+
+
+# AT-6: --dry-run reports + exits 0 without deletion
+def test_at6_dry_run_no_deletion(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import argparse as _ap
+
+    target = tmp_path / "deep" / "subdir"
+    target.mkdir(parents=True)
+    (target / "file1.txt").write_text("hello")
+    (target / "file2.txt").write_text("world")
+
+    ns = _ap.Namespace()
+    rc = run(ns, [str(target), "--dry-run"])
+
+    assert rc == 0
+    assert target.exists()  # not deleted
+    assert (target / "file1.txt").exists()
+    captured = capsys.readouterr()
+    assert "DRY RUN" in captured.err
+    assert "would delete" in captured.err.lower() or "would" in captured.err.lower()
+
+
+def test_dry_run_quiet_skips_scan(tmp_path: Path) -> None:
+    import argparse as _ap
+
+    target = tmp_path / "deep" / "sub"
+    target.mkdir(parents=True)
+    (target / "f").write_text("x")
+
+    ns = _ap.Namespace()
+    rc = run(ns, [str(target), "--dry-run", "-q"])
+    assert rc == 0
+    assert target.exists()
+
+
+# Confirm prompt: EOFError treated as N
+def test_confirm_eof_aborts(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from tctl.commands.fast_rm import _confirm
+
+    def _raise_eof(prompt: str = "") -> str:
+        raise EOFError()
+
+    monkeypatch.setattr("builtins.input", _raise_eof)
+
+    ok = _confirm(
+        paths=[Path("/tmp/deep/x")],
+        file_count=100,
+        total_bytes=12345,
+        jobs=4,
+        invalid_count=0,
+        assume_yes=False,
+        quiet=False,
+    )
+    assert ok is False
+    captured = capsys.readouterr()
+    assert "no tty" in captured.err.lower() or "aborted" in captured.err.lower()
+
+
+# Confirm prompt: -y bypasses (no input() call)
+def test_confirm_assume_yes_returns_true_without_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tctl.commands.fast_rm import _confirm
+
+    called: list[str] = []
+    monkeypatch.setattr("builtins.input", lambda p="": called.append(p) or "")
+
+    ok = _confirm(
+        paths=[Path("/tmp/x")],
+        file_count=0,
+        total_bytes=0,
+        jobs=4,
+        invalid_count=0,
+        assume_yes=True,
+        quiet=False,
+    )
+    assert ok is True
+    assert called == []  # input() never invoked
+
+
+# Confirm prompt: y/yes/Y/YES all accepted
+@pytest.mark.parametrize("answer", ["y", "Y", "yes", "YES"])
+def test_confirm_accepts_y_variants(monkeypatch: pytest.MonkeyPatch, answer: str) -> None:
+    from tctl.commands.fast_rm import _confirm
+
+    monkeypatch.setattr("builtins.input", lambda p="": answer)
+    ok = _confirm([Path("/tmp/x")], 0, 0, 4, 0, False, False)
+    assert ok is True
+
+
+# Confirm prompt: anything else rejects
+@pytest.mark.parametrize("answer", ["n", "N", "no", "", "xyz"])
+def test_confirm_rejects_non_y(monkeypatch: pytest.MonkeyPatch, answer: str) -> None:
+    from tctl.commands.fast_rm import _confirm
+
+    monkeypatch.setattr("builtins.input", lambda p="": answer)
+    ok = _confirm([Path("/tmp/x")], 0, 0, 4, 0, False, False)
+    assert ok is False
+
+
+# _fmt_bytes
+@pytest.mark.parametrize(
+    "n,expected",
+    [
+        (0, "0B"),
+        (1023, "1023B"),
+        (1024, "1.0KiB"),
+        (1536, "1.5KiB"),
+        (1048576, "1.0MiB"),
+        (1572864, "1.5MiB"),
+        (5_368_709_120, "5.0GiB"),
+    ],
+)
+def test_fmt_bytes(n: int, expected: str) -> None:
+    from tctl.commands.fast_rm import _fmt_bytes
+
+    assert _fmt_bytes(n) == expected
+
+
+# _prescan: real tmp tree
+def test_prescan_counts_files_and_bytes(tmp_path: Path) -> None:
+    from tctl.commands.fast_rm import _prescan
+
+    target = tmp_path / "deep" / "x"
+    target.mkdir(parents=True)
+    (target / "a").write_text("hello")  # 5 bytes
+    (target / "b").write_text("world!")  # 6 bytes
+    sub = target / "sub"
+    sub.mkdir()
+    (sub / "c").write_text("xyz")  # 3 bytes
+
+    file_count, total_bytes = _prescan([target])
+    assert file_count == 3
+    assert total_bytes >= 14  # du -sb may include dir entries; lenient check
