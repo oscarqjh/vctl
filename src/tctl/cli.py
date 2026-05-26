@@ -25,6 +25,7 @@ _WORKLOADS: dict[str, tuple[str, bool]] = {
 _PLATFORM_COMMANDS: dict[str, str] = {
     "config": "tctl.commands.config_cmd",
     "init-config": "tctl.commands.init_config",
+    "fast-rm": "tctl.commands.fast_rm",  # NEW
 }
 
 # Profile-aware verbs per workload: positional models/*.yaml → --profile
