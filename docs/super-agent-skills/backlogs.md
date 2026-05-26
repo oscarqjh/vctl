@@ -2,7 +2,7 @@
 
 ## In Progress
 
-_(none — v0.9.0 shipped 2026-05-18)_
+- **`tctl fast-rm` (v0.9.1).** Port `EASI/scripts/fast_rm.sh` into tctl as a new platform command. Parallel `find + xargs -P N` deletion with safety rails, `--detach` for tmux supervision, `--dry-run`, rename-then-rm trick. Multi-detach supported (each `-d` spawns `tctl-fastrm-<6hex>`). Spec: [specs/2026-05-26-fast-rm-port-design.md](specs/2026-05-26-fast-rm-port-design.md) — 11 ATs.
 
 ## Up Next
 
