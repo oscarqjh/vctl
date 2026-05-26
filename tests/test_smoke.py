@@ -67,7 +67,7 @@ def test_pyproject_version_matches_module_version() -> None:
     pkg_version = pyproject["project"]["version"]
     from tctl import __version__
 
-    assert pkg_version == __version__ == "0.9.0"
+    assert pkg_version == __version__ == "0.9.1"
 
 
 def test_tctl_package_importable() -> None:
@@ -75,7 +75,7 @@ def test_tctl_package_importable() -> None:
 
     tctl = importlib.import_module("tctl")
     assert hasattr(tctl, "__version__")
-    assert tctl.__version__ == "0.9.0"
+    assert tctl.__version__ == "0.9.1"
 
 
 def test_tctl_version_string_format() -> None:

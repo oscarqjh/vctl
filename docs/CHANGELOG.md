@@ -3,6 +3,26 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
+## [0.9.1] - 2026-05-26
+
+### Added
+
+- **`tctl fast-rm`** — new platform command. Parallel directory deletion for trees with millions of small files. Ported from `EASI/scripts/fast_rm.sh` with safety rails (dangerous-literal denylist, system-path denylist, `$HOME` guard, min-3-segments, `readlink -f` absolute-path resolution). Foreground (default) runs 3-phase deletion: parallel `find -type f | xargs -P N rm -f`, symlink cleanup, bottom-up empty-dir rmdir. Per-target failures don't abort the batch.
+- **`tctl fast-rm -d` / `--detach`** — spawn deletion in a tmux session named `tctl-fastrm-<6hex>` for huge trees that may run minutes/hours. Each `-d` invocation gets a unique 6-hex id, so multiple parallel detached runs coexist. Discover active runs via `tmux ls | grep tctl-fastrm-`. Logs at `~/.tctl/fastrm/<id>.log`.
+- **`tctl fast-rm --dry-run`** — validate + scan + report counts/size; no deletion. Overrides `--detach` (no tmux spawn).
+- **`tctl fast-rm -f LIST_FILE` / `--list-file LIST_FILE`** — read paths from a file (one per line; blank lines + `#` comments ignored; CRLF tolerated). Combinable with positional args.
+- **Rename-then-rm trick** — before phase 1, `os.rename(target, target + ".deleting-<id>")` makes the path disappear from listings instantly. Fallback in-place delete with warning on EXDEV (cross-filesystem), EPERM/EACCES (permission), EEXIST (1-in-16M id collision with stale `.deleting-<id>` leftover).
+- **Other flags:** `-j N` / `--jobs N` (parallel rm jobs, default `nproc`), `-y` / `--yes` (skip confirmation), `-q` / `--quiet` (skip pre-scan).
+
+### Exit codes
+
+- 0: all OK / dry-run
+- 1: some per-target failures (batch continues, summary reports them) — **diverges from bash `fast_rm.sh` which exits 2**; the Python port reserves exit 2 for tctl's standard "config error" semantic per CLAUDE.md
+- 2: validation error (no valid paths after filter, missing list file, etc.)
+- 130: Ctrl-C
+
+---
+
 ## [0.9.0] - 2026-05-18
 
 ### Breaking — project rename + workload reorg (no backwards compat)

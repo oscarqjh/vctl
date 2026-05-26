@@ -4,7 +4,7 @@ Concise reference for every `tctl` command and sub-command.
 Run `tctl <workload> <verb> --help` for the canonical help text (always up-to-date).
 
 **tctl** is a typed Python CLI for managing tmux-supervised long-running processes; ships workloads for vllm, haproxy, and lmms.
-Distributed via `uv tool install`. Current version: **0.9.0**.
+Distributed via `uv tool install`. Current version: **0.9.1**.
 
 ---
 
@@ -16,7 +16,7 @@ tctl <platform-cmd> [args]
 ```
 
 Workloads: `vllm`, `haproxy`, `lmms` (hidden).
-Platform commands: `config`, `init-config`.
+Platform commands: `config`, `init-config`, `fast-rm`.
 
 ---
 
@@ -299,6 +299,56 @@ Scaffold `cluster.yaml` and `models/*.yaml` from canonical templates into `~/.tc
 | `--profiles a,b,c`  | Scaffold only the named profiles (default: all built-in) |
 
 Built-in profiles: `qwen3_5-9b`, `qwen3-vl-30b-a3b`.
+
+---
+
+## `tctl fast-rm` — parallel directory deletion
+
+### `tctl fast-rm` — parallel directory deletion
+
+Synopsis:
+```
+tctl fast-rm <PATH> [<PATH>...] [-f LIST_FILE | --list-file LIST_FILE]
+                    [-j N | --jobs N]
+                    [-y | --yes]
+                    [-q | --quiet]
+                    [--dry-run]
+                    [-d | --detach]
+```
+
+Deletes one or more directory trees with OS-level parallelism (`find -type f | xargs -P N rm -f`). Much faster than `rm -rf` on trees with millions of small files. Safety-railed (refuses dangerous literals, system paths, `$HOME`, shallow paths).
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `-j N` / `--jobs N` | Parallel rm jobs (default `nproc`) |
+| `-y` / `--yes` | Skip confirmation prompt |
+| `-q` / `--quiet` | Skip pre-scan (file count + size) |
+| `-f` / `--list-file` | Read paths from file (one per line, `#` comments, blank lines OK) |
+| `--dry-run` | Validate + scan + report; no deletion. Overrides `--detach`. |
+| `-d` / `--detach` | Spawn in tmux session `tctl-fastrm-<6hex>`. Survives SSH disconnect. Multiple `-d` coexist. Log at `~/.tctl/fastrm/<id>.log`. |
+
+**Safety rails (rejected paths):**
+
+- Dangerous literals: `""`, `"."`, `".."`, `"~"`, `"/"`, `"/*"`
+- System paths: `/`, `/home`, `/root`, `/etc`, `/var`, `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/mnt`, `/proc`, `/sys`, `/dev`, `/boot`, `/tmp`
+- `$HOME` exactly
+- Paths with fewer than 3 segments (e.g. `/a/b`)
+- Paths that don't exist or aren't directories
+
+**Exit codes:**
+
+- 0: all OK / dry-run
+- 1: some per-target deletion failures
+- 2: validation error (no valid paths, missing list file)
+- 130: Ctrl-C
+
+**Discover active detached runs:**
+
+```
+tmux ls | grep '^tctl-fastrm-'
+```
 
 ---
 

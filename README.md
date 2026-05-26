@@ -268,6 +268,12 @@ For adding a new workload see [`docs/COOKBOOK-workloads.md`](docs/COOKBOOK-workl
 |---|---|
 | `tctl init-config [--dir] [--force] [--profiles]` | Scaffold `cluster.yaml` + model profiles into `~/.tctl/`. |
 
+### `tctl fast-rm` — parallel deletion
+
+| Command | Description |
+|---|---|
+| `tctl fast-rm <path>...` | Parallel directory deletion with safety rails. `-d` for tmux supervision. |
+
 ---
 
 ## Positional profile shortcut

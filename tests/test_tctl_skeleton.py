@@ -6,7 +6,7 @@ from __future__ import annotations
 def test_tctl_version() -> None:
     import tctl
 
-    assert tctl.__version__ == "0.9.0"
+    assert tctl.__version__ == "0.9.1"
 
 
 def test_tctl_workloads_importable() -> None:
