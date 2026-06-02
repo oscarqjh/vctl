@@ -2,7 +2,7 @@
 
 ## In Progress
 
-- **`tctl fast-rm` (v0.9.1).** Port `EASI/scripts/fast_rm.sh` into tctl as a new platform command. Parallel `find + xargs -P N` deletion with safety rails, `--detach` for tmux supervision, `--dry-run`, rename-then-rm trick. Multi-detach supported (each `-d` spawns `tctl-fastrm-<6hex>`). Spec: [specs/2026-05-26-fast-rm-port-design.md](specs/2026-05-26-fast-rm-port-design.md) — 11 ATs.
+_(none — v0.9.1 shipped 2026-06-02)_
 
 ## Up Next
 
@@ -28,6 +28,21 @@
 - **F5** *(probably wontfix)*: emit `daemon` directive in `render.py` + redirect stdout log to a file. F1's pidfile/pgrep fallback already covers status/stop; tradeoff (lose interactive `tmux attach`) outweighs the marginal pidfile cleanliness gain.
 
 ## Completed
+
+### 2026-06-02 — v0.9.1 `tctl fast-rm` (parallel directory deletion)
+
+- **`tctl fast-rm`** — new platform command. Ports `EASI/scripts/fast_rm.sh` with type-safe Python wrapper + tmux supervision option.
+- **Parallel deletion** via `subprocess.Popen` chain: `find -type f -print0 | xargs -0 -r -P N -n 1000 rm -f`. No shell=True. 10-15× faster than `rm -rf` on million-file trees.
+- **`-d` / `--detach`** spawns tmux session `tctl-fastrm-<6hex>` per invocation (multi-detach: N parallel deletions coexist). Uses v0.8.0 `TmuxSession` primitive. Log at `~/.tctl/fastrm/<id>.log`.
+- **`--dry-run`** validates + scans + reports without deletion. Overrides `--detach`.
+- **`-f` / `--list-file`** reads paths from file (blank lines + `#` comments OK, CRLF tolerated).
+- **Rename-then-rm trick:** `os.rename(target, target.deleting-<id>)` before phase 1 → path disappears from listings instantly. Fallback (with warning) on EXDEV / EPERM / EACCES / EEXIST.
+- **Safety rails ported from bash:** dangerous literals (`""`, `.`, `..`, `~`, `/`, `/*`), system-path denylist (`/home`, `/etc`, `/var`, ...), `$HOME` exact match, min 3 segments. All checked BEFORE any deletion.
+- **No-TTY safe:** `input()` EOFError → treated as "N" (matches bash `read` default).
+- **Exit codes:** 0 (success/dry-run), 1 (some failures — diverges from bash's 2; tctl reserves 2 for config errors), 2 (validation error), 130 (Ctrl-C).
+- 66 unit tests, 11 ATs covered. mypy strict + ruff clean. Coverage 63%.
+- Spec: [specs/2026-05-26-fast-rm-port-design.md](specs/2026-05-26-fast-rm-port-design.md) — 11 ATs.
+- Plan: [plans/2026-05-26-fast-rm-port.md](plans/2026-05-26-fast-rm-port.md) — 6 tasks.
 
 ### 2026-05-18 — v0.9.0 vctl → tctl rename + workload reorg
 

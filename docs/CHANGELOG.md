@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: Semver.
 
-## [0.9.1] - 2026-05-26
+## [0.9.1] - 2026-06-02
 
 ### Added
 
