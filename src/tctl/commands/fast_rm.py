@@ -530,9 +530,9 @@ def _build_subparser() -> argparse.ArgumentParser:
         "-j",
         "--jobs",
         type=int,
-        default=os.cpu_count() or 8,
+        default=16,
         metavar="N",
-        help="Parallel rm jobs (default: nproc, max useful ~16-32).",
+        help="Parallel rm jobs (default: 16; max useful ~16-32).",
     )
     p.add_argument(
         "-y",
